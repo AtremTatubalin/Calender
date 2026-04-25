@@ -3,55 +3,61 @@
 {% block content %}
 <section class="grid">
   <article class="card wide-card">
-    <h2>Календарь свободных дат</h2>
-    <p class="legend">
-      <span class="dot free"></span> Есть свободные слоты
-      <span class="dot full"></span> Полностью занято
-      <span class="dot blocked"></span> Полностью заблокировано
-      <span class="dot today-locked"></span> Сегодня (запись недоступна)
-    </p>
+    <details class="calendar-accordion">
+      <summary>
+        <h2>Календарь свободных дат</h2>
+        <span class="accordion-hint">Нажмите, чтобы раскрыть</span>
+      </summary>
 
-    {% if calendar_days %}
-      <div class="calendar-grid">
-        {% for day in calendar_days %}
-          <button
-            class="calendar-day {{ day.status }}"
-            type="button"
-            data-date="{{ day.date }}"
-            data-date-label="{{ day.date_label }}"
-            data-weekday-label="{{ day.weekday_label }}"
-            data-status="{{ day.status }}"
-            data-slots='[
-              {% for slot in day.slots %}
-                {
-                  "id": {{ slot.id }},
-                  "time": "{{ slot.slot_datetime | ru_datetime }}",
-                  "status": "{{ slot.status }}"
-                }{% if not loop.last %},{% endif %}
-              {% endfor %}
-            ]'
-          >
-            <span class="weekday">{{ day.weekday_label }}</span>
-            <span class="date-number">{{ day.date_label }}</span>
-            <span class="date-status">
-              {% if day.status == 'free' %}
-                Свободно
-              {% elif day.status == 'full' %}
-                Занято
-              {% elif day.status == 'blocked' %}
-                Заблокировано
-              {% elif day.status == 'today-locked' %}
-                Сегодня
-              {% else %}
-                Частично доступно
-              {% endif %}
-            </span>
-          </button>
-        {% endfor %}
-      </div>
-    {% else %}
-      <p>Нет дат для отображения.</p>
-    {% endif %}
+      <p class="legend">
+        <span class="legend-item"><span class="dot free"></span> Есть свободное время</span>
+        <span class="legend-item"><span class="dot full"></span> Полностью занято</span>
+        <span class="legend-item"><span class="dot blocked"></span> Полностью заблокировано</span>
+        <span class="legend-item"><span class="dot today-locked"></span> Сегодня (запись недоступна)</span>
+      </p>
+
+      {% if calendar_days %}
+        <div class="calendar-grid">
+          {% for day in calendar_days %}
+            <button
+              class="calendar-day {{ day.status }}"
+              type="button"
+              data-date="{{ day.date }}"
+              data-date-label="{{ day.date_label }}"
+              data-weekday-label="{{ day.weekday_label }}"
+              data-status="{{ day.status }}"
+              data-slots='[
+                {% for slot in day.slots %}
+                  {
+                    "id": {{ slot.id }},
+                    "time": "{{ slot.slot_datetime | ru_datetime }}",
+                    "status": "{{ slot.status }}"
+                  }{% if not loop.last %},{% endif %}
+                {% endfor %}
+              ]'
+            >
+              <span class="weekday">{{ day.weekday_label }}</span>
+              <span class="date-number">{{ day.date_label }}</span>
+              <span class="date-status">
+                {% if day.status == 'free' %}
+                  Свободно
+                {% elif day.status == 'full' %}
+                  Занято
+                {% elif day.status == 'blocked' %}
+                  Заблокировано
+                {% elif day.status == 'today-locked' %}
+                  Сегодня
+                {% else %}
+                  Частично доступно
+                {% endif %}
+              </span>
+            </button>
+          {% endfor %}
+        </div>
+      {% else %}
+        <p>Нет дат для отображения.</p>
+      {% endif %}
+    </details>
   </article>
 
   <article class="card">
@@ -65,11 +71,21 @@
               — {{ slot.first_name }} {{ slot.last_name }} ({{ slot.phone }})
             {% endif %}
             <form method="post" action="{{ url_for('cancel_slot', slot_id=slot.id) }}" class="inline-form">
-              <button type="submit">Отменить</button>
+              <button
+                type="submit"
+                {% if not session.get('is_admin') %}
+                  class="booking-cancel-btn"
+                  data-action="{{ url_for('cancel_slot', slot_id=slot.id) }}"
+                {% endif %}
+              >Отменить</button>
             </form>
             {% if not session.get('is_admin') %}
               <form method="post" action="{{ url_for('delete_slot', slot_id=slot.id) }}" class="inline-form">
-                <button type="submit" class="danger">Удалить запись</button>
+                <button
+                  type="submit"
+                  class="danger booking-cancel-btn"
+                  data-action="{{ url_for('delete_slot', slot_id=slot.id) }}"
+                >Удалить запись</button>
               </form>
             {% endif %}
           </li>
@@ -120,6 +136,20 @@
   </div>
 </div>
 
+{% if not session.get('is_admin') %}
+  <div id="confirm-modal" class="modal" hidden>
+    <div class="modal-content card">
+      <button type="button" class="close-btn" id="close-confirm-modal">✕</button>
+      <h3 id="confirm-modal-title">Подтверждение записи</h3>
+      <p id="confirm-modal-text"></p>
+      <div class="modal-actions">
+        <button type="button" id="confirm-modal-submit">Подтвердить</button>
+        <button type="button" class="secondary" id="confirm-modal-cancel">Отмена</button>
+      </div>
+    </div>
+  </div>
+{% endif %}
+
 {% if session.get('is_admin') %}
   <div id="secret-modal" class="modal" hidden>
     <div class="modal-content card">
@@ -145,6 +175,26 @@
   const modalTitle = document.getElementById('modal-title');
   const modalSlots = document.getElementById('modal-slots');
   const closeModal = document.getElementById('close-modal');
+  let pendingAction = null;
+
+  function submitPost(action) {
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = action;
+    document.body.appendChild(form);
+    form.submit();
+  }
+
+  function openConfirmModal(title, text, action) {
+    if (isAdmin) return;
+    const confirmModal = document.getElementById('confirm-modal');
+    const confirmModalTitle = document.getElementById('confirm-modal-title');
+    const confirmModalText = document.getElementById('confirm-modal-text');
+    confirmModalTitle.textContent = title;
+    confirmModalText.textContent = text;
+    pendingAction = action;
+    confirmModal.hidden = false;
+  }
 
   function makeForm(action, buttonText, className = '') {
     const form = document.createElement('form');
@@ -176,7 +226,7 @@
       } else {
         slots.forEach(slot => {
           const li = document.createElement('li');
-          li.textContent = `${slot.time} (${slot.status})`;
+          li.textContent = `${slot.time}`;
 
           if (slot.status === 'free') {
             li.appendChild(makeForm(`/admin/block/${slot.id}`, 'Блокировать время', 'danger'));
@@ -214,14 +264,11 @@
           confirmBtn.textContent = 'Записаться';
           confirmBtn.className = 'inline-form';
           confirmBtn.addEventListener('click', () => {
-            const confirmed = confirm(`Подтвердить запись?\n${weekdayLabel}, ${slot.time}`);
-            if (confirmed) {
-              const form = document.createElement('form');
-              form.method = 'post';
-              form.action = `/book/${slot.id}`;
-              document.body.appendChild(form);
-              form.submit();
-            }
+            openConfirmModal(
+              'Подтверждение записи',
+              `${weekdayLabel}, ${slot.time}`,
+              `/book/${slot.id}`
+            );
           });
 
           li.appendChild(confirmBtn);
@@ -254,7 +301,42 @@
     }
   });
 
-  if (isAdmin) {
+  if (!isAdmin) {
+    const confirmModal = document.getElementById('confirm-modal');
+    const closeConfirmModal = document.getElementById('close-confirm-modal');
+    const confirmModalCancel = document.getElementById('confirm-modal-cancel');
+    const confirmModalSubmit = document.getElementById('confirm-modal-submit');
+
+    function closeConfirmWindow() {
+      confirmModal.hidden = true;
+      pendingAction = null;
+    }
+
+    closeConfirmModal.addEventListener('click', closeConfirmWindow);
+    confirmModalCancel.addEventListener('click', closeConfirmWindow);
+    confirmModal.addEventListener('click', (event) => {
+      if (event.target === confirmModal) {
+        closeConfirmWindow();
+      }
+    });
+
+    confirmModalSubmit.addEventListener('click', () => {
+      if (pendingAction) {
+        submitPost(pendingAction);
+      }
+    });
+
+    document.querySelectorAll('.booking-cancel-btn').forEach(button => {
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        openConfirmModal(
+          'Подтверждение отмены',
+          'Вы уверены, что хотите отменить запись?',
+          button.dataset.action
+        );
+      });
+    });
+  } else {
     const secretModal = document.getElementById('secret-modal');
     const openSecretModal = document.getElementById('open-secret-modal');
     const closeSecretModal = document.getElementById('close-secret-modal');
@@ -275,4 +357,3 @@
   }
 </script>
 {% endblock %}
-
