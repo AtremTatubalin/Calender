@@ -9,6 +9,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATABASE = os.path.join(BASE_DIR, "app.db")
 ADMIN_SECRET_CODE = os.getenv("ADMIN_SECRET_CODE", "SUPER-ADMIN-123")
+SLOT_HOURS = (10, 12, 14)
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
@@ -61,25 +62,43 @@ def init_db():
             created_at TEXT NOT NULL,
             FOREIGN KEY(booked_by) REFERENCES users(id)
         );
+
+        CREATE TABLE IF NOT EXISTS settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
         """
+    )
+    db.execute(
+        """
+        INSERT OR IGNORE INTO settings (key, value, updated_at)
+        VALUES ('admin_secret_code', ?, ?)
+        """,
+        (ADMIN_SECRET_CODE, datetime.utcnow().isoformat()),
     )
     db.commit()
 
-    slot_count = db.execute("SELECT COUNT(*) AS cnt FROM slots").fetchone()["cnt"]
-    if slot_count == 0:
-        seed_default_slots(db)
-        db.commit()
+    refresh_slots(db)
+    db.commit()
     app.config["DB_READY"] = True
 
 
-def seed_default_slots(db):
-    now = datetime.utcnow().replace(minute=0, second=0, microsecond=0)
-    start = now + timedelta(days=1)
+def refresh_slots(db):
+    now = datetime.utcnow()
+    db.execute("DELETE FROM slots WHERE slot_datetime < ?", (now.isoformat(),))
+
+    seed_default_slots(db, now)
+
+
+def seed_default_slots(db, now: datetime):
+    now = now.replace(minute=0, second=0, microsecond=0)
+    start = now
     slots_to_add = []
 
     for day in range(0, 14):
         day_time = start + timedelta(days=day)
-        for hour in (10, 12, 14):
+        for hour in SLOT_HOURS:
             dt = day_time.replace(hour=hour)
             slots_to_add.append((dt.isoformat(), "free", None, datetime.utcnow().isoformat()))
 
@@ -119,6 +138,9 @@ def admin_required(view):
 def load_logged_in_user():
     if not app.config.get("DB_READY"):
         init_db()
+    else:
+        refresh_slots(get_db())
+        get_db().commit()
 
     user_id = session.get("user_id")
     g.user = None
@@ -147,13 +169,15 @@ def register():
 
         error = None
 
+        db = get_db()
+        valid_admin_secret = get_admin_secret_code(db)
+
         if not first_name or not last_name or not address or not phone or not password:
             error = "Заполните все обязательные поля."
-        elif make_admin and admin_code != ADMIN_SECRET_CODE:
+        elif make_admin and admin_code != valid_admin_secret:
             error = "Неверный секретный код для создания админ-аккаунта."
 
         if error is None:
-            db = get_db()
             try:
                 db.execute(
                     """
@@ -214,10 +238,18 @@ def logout():
 @login_required
 def dashboard():
     db = get_db()
+    today = datetime.utcnow().date().isoformat()
 
     free_slots = db.execute(
-        "SELECT * FROM slots WHERE status = 'free' ORDER BY slot_datetime"
+        """
+        SELECT * FROM slots
+        WHERE status = 'free'
+          AND date(slot_datetime) > date(?)
+        ORDER BY slot_datetime
+        """,
+        (today,),
     ).fetchall()
+    calendar_days = build_calendar_days(db, today)
 
     blocked_slots = []
     users = []
@@ -256,6 +288,7 @@ def dashboard():
     return render_template(
         "dashboard.html",
         free_slots=free_slots,
+        calendar_days=calendar_days,
         my_bookings=my_bookings,
         blocked_slots=blocked_slots,
         users=users,
@@ -267,9 +300,12 @@ def dashboard():
 def book_slot(slot_id):
     db = get_db()
     slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+    today = datetime.utcnow().date().isoformat()
 
     if slot is None:
         flash("Слот не найден.", "error")
+    elif slot["slot_datetime"][:10] == today:
+        flash("Запись на занятия в текущий день недоступна.", "error")
     elif slot["status"] != "free":
         flash("Этот слот уже недоступен.", "error")
     else:
@@ -388,6 +424,28 @@ def add_slot():
     return redirect(url_for("dashboard"))
 
 
+@app.route("/admin/update-secret-code", methods=["POST"])
+@admin_required
+def update_admin_secret_code():
+    new_code = request.form.get("new_admin_code", "").strip()
+    if not new_code:
+        flash("Новый секретный код не может быть пустым.", "error")
+        return redirect(url_for("dashboard"))
+
+    db = get_db()
+    db.execute(
+        """
+        UPDATE settings
+        SET value = ?, updated_at = ?
+        WHERE key = 'admin_secret_code'
+        """,
+        (new_code, datetime.utcnow().isoformat()),
+    )
+    db.commit()
+    flash("Секретный код для регистрации админа обновлен.", "success")
+    return redirect(url_for("dashboard"))
+
+
 @app.route("/admin/users/delete/<int:user_id>", methods=["POST"])
 @admin_required
 def delete_user(user_id):
@@ -410,6 +468,58 @@ def delete_user(user_id):
     db.commit()
     flash("Пользователь удален.", "success")
     return redirect(url_for("dashboard"))
+
+
+def get_admin_secret_code(db):
+    row = db.execute(
+        "SELECT value FROM settings WHERE key = 'admin_secret_code'"
+    ).fetchone()
+    if row is None:
+        return ADMIN_SECRET_CODE
+    return row["value"]
+
+
+def build_calendar_days(db, today_iso):
+    rows = db.execute(
+        """
+        SELECT id, slot_datetime, status
+        FROM slots
+        WHERE date(slot_datetime) >= date(?)
+        ORDER BY slot_datetime
+        """,
+        (today_iso,),
+    ).fetchall()
+
+    grouped = {}
+    for row in rows:
+        date_key = row["slot_datetime"][:10]
+        grouped.setdefault(date_key, []).append(row)
+
+    calendar_days = []
+    for date_key, day_slots in grouped.items():
+        free_count = sum(1 for slot in day_slots if slot["status"] == "free")
+        blocked_count = sum(1 for slot in day_slots if slot["status"] == "blocked")
+        booked_count = sum(1 for slot in day_slots if slot["status"] == "booked")
+
+        if date_key == today_iso:
+            day_status = "today-locked"
+        elif free_count > 0:
+            day_status = "free"
+        elif booked_count == len(day_slots):
+            day_status = "full"
+        elif blocked_count == len(day_slots):
+            day_status = "blocked"
+        else:
+            day_status = "mixed"
+
+        calendar_days.append(
+            {
+                "date": date_key,
+                "status": day_status,
+                "slots": day_slots,
+            }
+        )
+    return calendar_days
 
 
 if __name__ == "__main__":

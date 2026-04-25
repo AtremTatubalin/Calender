@@ -2,26 +2,52 @@
 {% block title %}Личный кабинет{% endblock %}
 {% block content %}
 <section class="grid">
-  <article class="card">
-    <h2>Свободные слоты</h2>
-    {% if free_slots %}
-      <ul>
-        {% for slot in free_slots %}
-          <li>
-            {{ slot.slot_datetime | ru_datetime }}
-            <form method="post" action="{{ url_for('book_slot', slot_id=slot.id) }}" class="inline-form">
-              <button type="submit">Записаться</button>
-            </form>
-            {% if session.get('is_admin') %}
-              <form method="post" action="{{ url_for('block_slot', slot_id=slot.id) }}" class="inline-form">
-                <button type="submit" class="danger">Блокировать</button>
-              </form>
-            {% endif %}
-          </li>
+  <article class="card wide-card">
+    <h2>Календарь свободных дат</h2>
+    <p class="legend">
+      <span class="dot free"></span> Есть свободные слоты
+      <span class="dot full"></span> Полностью занято
+      <span class="dot blocked"></span> Полностью заблокировано
+      <span class="dot today-locked"></span> Сегодня (запись недоступна)
+    </p>
+
+    {% if calendar_days %}
+      <div class="calendar-grid">
+        {% for day in calendar_days %}
+          <button
+            class="calendar-day {{ day.status }}"
+            type="button"
+            data-date="{{ day.date }}"
+            data-status="{{ day.status }}"
+            data-slots='[
+              {% for slot in day.slots %}
+                {
+                  "id": {{ slot.id }},
+                  "time": "{{ slot.slot_datetime | ru_datetime }}",
+                  "status": "{{ slot.status }}"
+                }{% if not loop.last %},{% endif %}
+              {% endfor %}
+            ]'
+          >
+            <span class="date-number">{{ day.date }}</span>
+            <span class="date-status">
+              {% if day.status == 'free' %}
+                Свободно
+              {% elif day.status == 'full' %}
+                Занято
+              {% elif day.status == 'blocked' %}
+                Заблокировано
+              {% elif day.status == 'today-locked' %}
+                Сегодня
+              {% else %}
+                Частично доступно
+              {% endif %}
+            </span>
+          </button>
         {% endfor %}
-      </ul>
+      </div>
     {% else %}
-      <p>Нет доступных слотов.</p>
+      <p>Нет дат для отображения.</p>
     {% endif %}
   </article>
 
@@ -71,16 +97,6 @@
     </article>
 
     <article class="card">
-      <h2>Добавить новый слот (админ)</h2>
-      <form method="post" action="{{ url_for('add_slot') }}" class="form-grid">
-        <label>Дата и время
-          <input type="datetime-local" name="slot_datetime" required />
-        </label>
-        <button type="submit">Добавить слот</button>
-      </form>
-    </article>
-
-    <article class="card">
       <h2>Пользователи (админ)</h2>
       {% if users %}
         <ul>
@@ -100,6 +116,87 @@
         <p>Пользователи не найдены.</p>
       {% endif %}
     </article>
+
+    <article class="card">
+      <h2>Сменить секретный код админа</h2>
+      <form method="post" action="{{ url_for('update_admin_secret_code') }}" class="form-grid">
+        <label>Новый секретный код
+          <input type="text" name="new_admin_code" required />
+        </label>
+        <button type="submit">Сохранить новый код</button>
+      </form>
+    </article>
   {% endif %}
 </section>
+
+<div id="slots-modal" class="modal" hidden>
+  <div class="modal-content card">
+    <button type="button" class="close-btn" id="close-modal">✕</button>
+    <h3 id="modal-title">Свободное время</h3>
+    <ul id="modal-slots"></ul>
+  </div>
+</div>
+
+<script>
+  const buttons = document.querySelectorAll('.calendar-day');
+  const modal = document.getElementById('slots-modal');
+  const modalTitle = document.getElementById('modal-title');
+  const modalSlots = document.getElementById('modal-slots');
+  const closeModal = document.getElementById('close-modal');
+
+  function openModal(date, status, slots) {
+    modalTitle.textContent = `Слоты на ${date}`;
+    modalSlots.innerHTML = '';
+
+    const freeSlots = slots.filter(slot => slot.status === 'free');
+    const isTodayLocked = status === 'today-locked';
+
+    if (!freeSlots.length || isTodayLocked) {
+      const li = document.createElement('li');
+      li.textContent = isTodayLocked
+        ? 'На сегодня запись закрыта.'
+        : 'Свободного времени нет.';
+      modalSlots.appendChild(li);
+    } else {
+      freeSlots.forEach(slot => {
+        const li = document.createElement('li');
+        li.textContent = slot.time;
+
+        const form = document.createElement('form');
+        form.method = 'post';
+        form.action = `/book/${slot.id}`;
+        form.className = 'inline-form';
+
+        const button = document.createElement('button');
+        button.type = 'submit';
+        button.textContent = 'Записаться';
+
+        form.appendChild(button);
+        li.appendChild(form);
+        modalSlots.appendChild(li);
+      });
+    }
+
+    modal.hidden = false;
+  }
+
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const date = btn.dataset.date;
+      const status = btn.dataset.status;
+      const slots = JSON.parse(btn.dataset.slots);
+      openModal(date, status, slots);
+    });
+  });
+
+  closeModal.addEventListener('click', () => {
+    modal.hidden = true;
+  });
+
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) {
+      modal.hidden = true;
+    }
+  });
+</script>
 {% endblock %}
