@@ -79,15 +79,6 @@
                 {% endif %}
               >Отменить</button>
             </form>
-            {% if not session.get('is_admin') %}
-              <form method="post" action="{{ url_for('delete_slot', slot_id=slot.id) }}" class="inline-form">
-                <button
-                  type="submit"
-                  class="danger booking-cancel-btn"
-                  data-action="{{ url_for('delete_slot', slot_id=slot.id) }}"
-                >Удалить запись</button>
-              </form>
-            {% endif %}
           </li>
         {% endfor %}
       </ul>
