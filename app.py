@@ -79,7 +79,7 @@ def seed_default_slots(db):
 
     for day in range(0, 14):
         day_time = start + timedelta(days=day)
-        for hour in (9, 11, 13, 15, 17):
+        for hour in (10, 12, 14):
             dt = day_time.replace(hour=hour)
             slots_to_add.append((dt.isoformat(), "free", None, datetime.utcnow().isoformat()))
 
@@ -219,22 +219,10 @@ def dashboard():
         "SELECT * FROM slots WHERE status = 'free' ORDER BY slot_datetime"
     ).fetchall()
 
-    my_bookings = db.execute(
-        """
-        SELECT * FROM slots
-        WHERE status = 'booked' AND booked_by = ?
-        ORDER BY slot_datetime
-        """,
-        (session["user_id"],),
-    ).fetchall()
-
     blocked_slots = []
-    booked_slots = []
+    users = []
     if session.get("is_admin"):
-        blocked_slots = db.execute(
-            "SELECT * FROM slots WHERE status = 'blocked' ORDER BY slot_datetime"
-        ).fetchall()
-        booked_slots = db.execute(
+        my_bookings = db.execute(
             """
             SELECT s.*, u.first_name, u.last_name, u.phone
             FROM slots s
@@ -243,13 +231,34 @@ def dashboard():
             ORDER BY s.slot_datetime
             """
         ).fetchall()
+    else:
+        my_bookings = db.execute(
+            """
+            SELECT * FROM slots
+            WHERE status = 'booked' AND booked_by = ?
+            ORDER BY slot_datetime
+            """,
+            (session["user_id"],),
+        ).fetchall()
+
+    if session.get("is_admin"):
+        blocked_slots = db.execute(
+            "SELECT * FROM slots WHERE status = 'blocked' ORDER BY slot_datetime"
+        ).fetchall()
+        users = db.execute(
+            """
+            SELECT id, first_name, last_name, phone, address, is_admin, created_at
+            FROM users
+            ORDER BY created_at DESC
+            """
+        ).fetchall()
 
     return render_template(
         "dashboard.html",
         free_slots=free_slots,
         my_bookings=my_bookings,
         blocked_slots=blocked_slots,
-        booked_slots=booked_slots,
+        users=users,
     )
 
 
@@ -376,6 +385,30 @@ def add_slot():
     except sqlite3.IntegrityError:
         flash("Такой слот уже существует.", "error")
 
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/admin/users/delete/<int:user_id>", methods=["POST"])
+@admin_required
+def delete_user(user_id):
+    db = get_db()
+    user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
+
+    if user is None:
+        flash("Пользователь не найден.", "error")
+        return redirect(url_for("dashboard"))
+
+    if user["id"] == session["user_id"]:
+        flash("Нельзя удалить свою учетную запись администратора.", "error")
+        return redirect(url_for("dashboard"))
+
+    db.execute(
+        "UPDATE slots SET status = 'free', booked_by = NULL WHERE booked_by = ?",
+        (user_id,),
+    )
+    db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    db.commit()
+    flash("Пользователь удален.", "success")
     return redirect(url_for("dashboard"))
 
 
