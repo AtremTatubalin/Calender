@@ -1,0 +1,277 @@
+{% extends 'base.html' %}
+{% block title %}Личный кабинет{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card wide-card">
+    <h2>Календарь свободных дат</h2>
+    <p class="legend">
+      <span class="dot free"></span> Есть свободные слоты
+      <span class="dot full"></span> Полностью занято
+      <span class="dot blocked"></span> Полностью заблокировано
+      <span class="dot today-locked"></span> Сегодня (запись недоступна)
+    </p>
+
+    {% if calendar_days %}
+      <div class="calendar-grid">
+        {% for day in calendar_days %}
+          <button
+            class="calendar-day {{ day.status }}"
+            type="button"
+            data-date="{{ day.date }}"
+            data-date-label="{{ day.date_label }}"
+            data-weekday-label="{{ day.weekday_label }}"
+            data-status="{{ day.status }}"
+            data-slots='[
+              {% for slot in day.slots %}
+                {
+                  "id": {{ slot.id }},
+                  "time": "{{ slot.slot_datetime | ru_datetime }}",
+                  "status": "{{ slot.status }}"
+                }{% if not loop.last %},{% endif %}
+              {% endfor %}
+            ]'
+          >
+            <span class="weekday">{{ day.weekday_label }}</span>
+            <span class="date-number">{{ day.date_label }}</span>
+            <span class="date-status">
+              {% if day.status == 'free' %}
+                Свободно
+              {% elif day.status == 'full' %}
+                Занято
+              {% elif day.status == 'blocked' %}
+                Заблокировано
+              {% elif day.status == 'today-locked' %}
+                Сегодня
+              {% else %}
+                Частично доступно
+              {% endif %}
+            </span>
+          </button>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>Нет дат для отображения.</p>
+    {% endif %}
+  </article>
+
+  <article class="card">
+    <h2>{% if session.get('is_admin') %}Записи{% else %}Мои записи{% endif %}</h2>
+    {% if my_bookings %}
+      <ul>
+        {% for slot in my_bookings %}
+          <li>
+            {{ slot.slot_datetime | ru_datetime }}
+            {% if session.get('is_admin') %}
+              — {{ slot.first_name }} {{ slot.last_name }} ({{ slot.phone }})
+            {% endif %}
+            <form method="post" action="{{ url_for('cancel_slot', slot_id=slot.id) }}" class="inline-form">
+              <button type="submit">Отменить</button>
+            </form>
+            {% if not session.get('is_admin') %}
+              <form method="post" action="{{ url_for('delete_slot', slot_id=slot.id) }}" class="inline-form">
+                <button type="submit" class="danger">Удалить запись</button>
+              </form>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>У вас пока нет записей.</p>
+    {% endif %}
+  </article>
+
+  {% if session.get('is_admin') %}
+    <article class="card">
+      <h2>Заблокированное время</h2>
+      {% if blocked_slots %}
+        <ul>
+          {% for slot in blocked_slots %}
+            <li>
+              {{ slot.slot_datetime | ru_datetime }}
+              <form method="post" action="{{ url_for('unblock_slot', slot_id=slot.id) }}" class="inline-form">
+                <button type="submit">Разблокировать</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>Заблокированных слотов нет.</p>
+      {% endif %}
+    </article>
+
+    <article class="card">
+      <h2>Пользователи</h2>
+      <p>Список пользователей вынесен на отдельную страницу в виде таблицы.</p>
+      <a class="button-link" href="{{ url_for('admin_users') }}">Открыть страницу пользователей</a>
+    </article>
+
+    <article class="card">
+      <h2>Секретный код админа</h2>
+      <button type="button" id="open-secret-modal">Сменить секретный код админа</button>
+    </article>
+  {% endif %}
+</section>
+
+<div id="slots-modal" class="modal" hidden>
+  <div class="modal-content card">
+    <button type="button" class="close-btn" id="close-modal">✕</button>
+    <h3 id="modal-title">Свободное время</h3>
+    <ul id="modal-slots"></ul>
+  </div>
+</div>
+
+{% if session.get('is_admin') %}
+  <div id="secret-modal" class="modal" hidden>
+    <div class="modal-content card">
+      <button type="button" class="close-btn" id="close-secret-modal">✕</button>
+      <h3>Смена секретного кода</h3>
+      <form method="post" action="{{ url_for('update_admin_secret_code') }}" class="form-grid">
+        <label>Старый код
+          <input type="text" name="old_admin_code" value="{{ current_secret_code }}" required />
+        </label>
+        <label>Новый код
+          <input type="text" name="new_admin_code" required />
+        </label>
+        <button type="submit">Сохранить</button>
+      </form>
+    </div>
+  </div>
+{% endif %}
+
+<script>
+  const isAdmin = {{ 'true' if session.get('is_admin') else 'false' }};
+  const buttons = document.querySelectorAll('.calendar-day');
+  const modal = document.getElementById('slots-modal');
+  const modalTitle = document.getElementById('modal-title');
+  const modalSlots = document.getElementById('modal-slots');
+  const closeModal = document.getElementById('close-modal');
+
+  function makeForm(action, buttonText, className = '') {
+    const form = document.createElement('form');
+    form.method = 'post';
+    form.action = action;
+    form.className = 'inline-form';
+
+    const button = document.createElement('button');
+    button.type = 'submit';
+    button.textContent = buttonText;
+    if (className) button.className = className;
+
+    form.appendChild(button);
+    return form;
+  }
+
+  function openModal(dateIso, dateLabel, weekdayLabel, status, slots) {
+    modalTitle.textContent = `${weekdayLabel}, ${dateLabel}`;
+    modalSlots.innerHTML = '';
+
+    const freeSlots = slots.filter(slot => slot.status === 'free');
+    const isTodayLocked = status === 'today-locked';
+
+    if (isAdmin) {
+      if (!slots.length) {
+        const li = document.createElement('li');
+        li.textContent = 'Слотов на выбранную дату нет.';
+        modalSlots.appendChild(li);
+      } else {
+        slots.forEach(slot => {
+          const li = document.createElement('li');
+          li.textContent = `${slot.time} (${slot.status})`;
+
+          if (slot.status === 'free') {
+            li.appendChild(makeForm(`/admin/block/${slot.id}`, 'Блокировать время', 'danger'));
+          }
+
+          modalSlots.appendChild(li);
+        });
+      }
+
+      const blockDayLi = document.createElement('li');
+      blockDayLi.className = 'block-day-item';
+      blockDayLi.textContent = 'Действие для всей даты:';
+      const blockDayForm = makeForm('/admin/block-day', 'Блокировать день целиком', 'danger');
+      const hiddenInput = document.createElement('input');
+      hiddenInput.type = 'hidden';
+      hiddenInput.name = 'date';
+      hiddenInput.value = dateIso;
+      blockDayForm.appendChild(hiddenInput);
+      blockDayLi.appendChild(blockDayForm);
+      modalSlots.appendChild(blockDayLi);
+    } else {
+      if (!freeSlots.length || isTodayLocked) {
+        const li = document.createElement('li');
+        li.textContent = isTodayLocked
+          ? 'На сегодня запись закрыта.'
+          : 'Свободного времени нет.';
+        modalSlots.appendChild(li);
+      } else {
+        freeSlots.forEach(slot => {
+          const li = document.createElement('li');
+          li.textContent = `${slot.time}`;
+
+          const confirmBtn = document.createElement('button');
+          confirmBtn.type = 'button';
+          confirmBtn.textContent = 'Записаться';
+          confirmBtn.className = 'inline-form';
+          confirmBtn.addEventListener('click', () => {
+            const confirmed = confirm(`Подтвердить запись?\n${weekdayLabel}, ${slot.time}`);
+            if (confirmed) {
+              const form = document.createElement('form');
+              form.method = 'post';
+              form.action = `/book/${slot.id}`;
+              document.body.appendChild(form);
+              form.submit();
+            }
+          });
+
+          li.appendChild(confirmBtn);
+          modalSlots.appendChild(li);
+        });
+      }
+    }
+
+    modal.hidden = false;
+  }
+
+  buttons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const date = btn.dataset.date;
+      const dateLabel = btn.dataset.dateLabel;
+      const weekdayLabel = btn.dataset.weekdayLabel;
+      const status = btn.dataset.status;
+      const slots = JSON.parse(btn.dataset.slots);
+      openModal(date, dateLabel, weekdayLabel, status, slots);
+    });
+  });
+
+  closeModal.addEventListener('click', () => {
+    modal.hidden = true;
+  });
+
+  modal.addEventListener('click', (event) => {
+    if (event.target === modal) {
+      modal.hidden = true;
+    }
+  });
+
+  if (isAdmin) {
+    const secretModal = document.getElementById('secret-modal');
+    const openSecretModal = document.getElementById('open-secret-modal');
+    const closeSecretModal = document.getElementById('close-secret-modal');
+
+    openSecretModal.addEventListener('click', () => {
+      secretModal.hidden = false;
+    });
+
+    closeSecretModal.addEventListener('click', () => {
+      secretModal.hidden = true;
+    });
+
+    secretModal.addEventListener('click', (event) => {
+      if (event.target === secretModal) {
+        secretModal.hidden = true;
+      }
+    });
+  }
+</script>
+{% endblock %}

@@ -1,0 +1,18 @@
+{% extends 'base.html' %}
+{% block title %}Вход{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Вход</h2>
+  <form method="post" class="form-grid">
+    <label>Номер телефона
+      <input type="text" name="phone" required />
+    </label>
+
+    <label>Пароль
+      <input type="password" name="password" required />
+    </label>
+
+    <button type="submit">Войти</button>
+  </form>
+</section>
+{% endblock %}
