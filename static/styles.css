@@ -157,6 +157,12 @@ li {
   padding: 10px;
 }
 
+.weekday {
+  font-size: 12px;
+  opacity: 0.8;
+  display: block;
+}
+
 .calendar-day.free { border-color: #16a34a; }
 .calendar-day.full { border-color: #dc2626; }
 .calendar-day.blocked { border-color: #7c3aed; }
@@ -199,6 +205,41 @@ li {
   top: 10px;
   background: transparent;
   border: 1px solid #4b5563;
+}
+
+.button-link {
+  display: inline-block;
+  background: #2563eb;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.users-table th,
+.users-table td {
+  border: 1px solid #374151;
+  padding: 8px;
+  text-align: left;
+}
+
+.users-table thead {
+  background: #1f2937;
+}
+
+.block-day-item {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #374151;
 }
 
 @media (max-width: 640px) {

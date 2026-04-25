@@ -87,6 +87,16 @@ def init_db():
 def refresh_slots(db):
     now = datetime.utcnow()
     db.execute("DELETE FROM slots WHERE slot_datetime < ?", (now.isoformat(),))
+    db.execute(
+        """
+        DELETE FROM slots
+        WHERE status != 'booked'
+          AND (
+            CAST(strftime('%H', slot_datetime) AS INTEGER) NOT IN (10, 12, 14)
+            OR strftime('%M', slot_datetime) != '00'
+          )
+        """
+    )
 
     seed_default_slots(db, now)
 
@@ -239,20 +249,9 @@ def logout():
 def dashboard():
     db = get_db()
     today = datetime.utcnow().date().isoformat()
-
-    free_slots = db.execute(
-        """
-        SELECT * FROM slots
-        WHERE status = 'free'
-          AND date(slot_datetime) > date(?)
-        ORDER BY slot_datetime
-        """,
-        (today,),
-    ).fetchall()
     calendar_days = build_calendar_days(db, today)
 
     blocked_slots = []
-    users = []
     if session.get("is_admin"):
         my_bookings = db.execute(
             """
@@ -277,21 +276,16 @@ def dashboard():
         blocked_slots = db.execute(
             "SELECT * FROM slots WHERE status = 'blocked' ORDER BY slot_datetime"
         ).fetchall()
-        users = db.execute(
-            """
-            SELECT id, first_name, last_name, phone, address, is_admin, created_at
-            FROM users
-            ORDER BY created_at DESC
-            """
-        ).fetchall()
+        current_secret_code = get_admin_secret_code(db)
+    else:
+        current_secret_code = ""
 
     return render_template(
         "dashboard.html",
-        free_slots=free_slots,
         calendar_days=calendar_days,
         my_bookings=my_bookings,
         blocked_slots=blocked_slots,
-        users=users,
+        current_secret_code=current_secret_code,
     )
 
 
@@ -427,12 +421,19 @@ def add_slot():
 @app.route("/admin/update-secret-code", methods=["POST"])
 @admin_required
 def update_admin_secret_code():
+    old_code = request.form.get("old_admin_code", "").strip()
     new_code = request.form.get("new_admin_code", "").strip()
+    db = get_db()
+    current_code = get_admin_secret_code(db)
+
+    if old_code != current_code:
+        flash("Старый секретный код введен неверно.", "error")
+        return redirect(url_for("dashboard"))
+
     if not new_code:
         flash("Новый секретный код не может быть пустым.", "error")
         return redirect(url_for("dashboard"))
 
-    db = get_db()
     db.execute(
         """
         UPDATE settings
@@ -443,6 +444,42 @@ def update_admin_secret_code():
     )
     db.commit()
     flash("Секретный код для регистрации админа обновлен.", "success")
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/admin/users")
+@admin_required
+def admin_users():
+    db = get_db()
+    users = db.execute(
+        """
+        SELECT id, first_name, last_name, phone, address, is_admin, created_at
+        FROM users
+        ORDER BY created_at DESC
+        """
+    ).fetchall()
+    return render_template("admin_users.html", users=users)
+
+
+@app.route("/admin/block-day", methods=["POST"])
+@admin_required
+def block_day():
+    date_str = request.form.get("date", "").strip()
+    if not date_str:
+        flash("Дата для блокировки не передана.", "error")
+        return redirect(url_for("dashboard"))
+
+    db = get_db()
+    db.execute(
+        """
+        UPDATE slots
+        SET status = 'blocked', booked_by = NULL
+        WHERE date(slot_datetime) = date(?) AND status != 'booked'
+        """,
+        (date_str,),
+    )
+    db.commit()
+    flash(f"Все свободные слоты на {date_str} заблокированы.", "success")
     return redirect(url_for("dashboard"))
 
 
@@ -515,11 +552,24 @@ def build_calendar_days(db, today_iso):
         calendar_days.append(
             {
                 "date": date_key,
+                "date_label": format_day_label(date_key),
+                "weekday_label": weekday_label(date_key),
                 "status": day_status,
                 "slots": day_slots,
             }
         )
     return calendar_days
+
+
+def format_day_label(date_iso):
+    dt = datetime.fromisoformat(date_iso)
+    return dt.strftime("%d.%m")
+
+
+def weekday_label(date_iso):
+    weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
+    dt = datetime.fromisoformat(date_iso)
+    return weekdays[dt.weekday()]
 
 
 if __name__ == "__main__":

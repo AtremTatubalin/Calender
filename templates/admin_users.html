@@ -1,0 +1,45 @@
+{% extends 'base.html' %}
+{% block title %}Пользователи{% endblock %}
+{% block content %}
+<section class="card">
+  <h2>Пользователи</h2>
+  <p><a class="button-link" href="{{ url_for('dashboard') }}">← Назад в кабинет</a></p>
+
+  {% if users %}
+    <div class="table-wrap">
+      <table class="users-table">
+        <thead>
+          <tr>
+            <th>ID</th>
+            <th>Имя</th>
+            <th>Фамилия</th>
+            <th>Телефон</th>
+            <th>Адрес</th>
+            <th>Роль</th>
+            <th>Действие</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for user in users %}
+            <tr>
+              <td>{{ user.id }}</td>
+              <td>{{ user.first_name }}</td>
+              <td>{{ user.last_name }}</td>
+              <td>{{ user.phone }}</td>
+              <td>{{ user.address }}</td>
+              <td>{% if user.is_admin %}ADMIN{% else %}USER{% endif %}</td>
+              <td>
+                <form method="post" action="{{ url_for('delete_user', user_id=user.id) }}">
+                  <button type="submit" class="danger">Удалить</button>
+                </form>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <p>Пользователи не найдены.</p>
+  {% endif %}
+</section>
+{% endblock %}
