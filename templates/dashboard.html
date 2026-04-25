@@ -1,0 +1,105 @@
+{% extends 'base.html' %}
+{% block title %}Личный кабинет{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card">
+    <h2>Свободные слоты</h2>
+    {% if free_slots %}
+      <ul>
+        {% for slot in free_slots %}
+          <li>
+            {{ slot.slot_datetime | ru_datetime }}
+            <form method="post" action="{{ url_for('book_slot', slot_id=slot.id) }}" class="inline-form">
+              <button type="submit">Записаться</button>
+            </form>
+            {% if session.get('is_admin') %}
+              <form method="post" action="{{ url_for('block_slot', slot_id=slot.id) }}" class="inline-form">
+                <button type="submit" class="danger">Блокировать</button>
+              </form>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>Нет доступных слотов.</p>
+    {% endif %}
+  </article>
+
+  <article class="card">
+    <h2>{% if session.get('is_admin') %}Записи{% else %}Мои записи{% endif %}</h2>
+    {% if my_bookings %}
+      <ul>
+        {% for slot in my_bookings %}
+          <li>
+            {{ slot.slot_datetime | ru_datetime }}
+            {% if session.get('is_admin') %}
+              — {{ slot.first_name }} {{ slot.last_name }} ({{ slot.phone }})
+            {% endif %}
+            <form method="post" action="{{ url_for('cancel_slot', slot_id=slot.id) }}" class="inline-form">
+              <button type="submit">Отменить</button>
+            </form>
+            {% if not session.get('is_admin') %}
+              <form method="post" action="{{ url_for('delete_slot', slot_id=slot.id) }}" class="inline-form">
+                <button type="submit" class="danger">Удалить запись</button>
+              </form>
+            {% endif %}
+          </li>
+        {% endfor %}
+      </ul>
+    {% else %}
+      <p>У вас пока нет записей.</p>
+    {% endif %}
+  </article>
+
+  {% if session.get('is_admin') %}
+    <article class="card">
+      <h2>Заблокированные слоты (админ)</h2>
+      {% if blocked_slots %}
+        <ul>
+          {% for slot in blocked_slots %}
+            <li>
+              {{ slot.slot_datetime | ru_datetime }}
+              <form method="post" action="{{ url_for('unblock_slot', slot_id=slot.id) }}" class="inline-form">
+                <button type="submit">Разблокировать</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>Заблокированных слотов нет.</p>
+      {% endif %}
+    </article>
+
+    <article class="card">
+      <h2>Добавить новый слот (админ)</h2>
+      <form method="post" action="{{ url_for('add_slot') }}" class="form-grid">
+        <label>Дата и время
+          <input type="datetime-local" name="slot_datetime" required />
+        </label>
+        <button type="submit">Добавить слот</button>
+      </form>
+    </article>
+
+    <article class="card">
+      <h2>Пользователи (админ)</h2>
+      {% if users %}
+        <ul>
+          {% for user in users %}
+            <li>
+              {{ user.first_name }} {{ user.last_name }} ({{ user.phone }}) — {{ user.address }}
+              {% if user.is_admin %}
+                <span class="badge">ADMIN</span>
+              {% endif %}
+              <form method="post" action="{{ url_for('delete_user', user_id=user.id) }}" class="inline-form">
+                <button type="submit" class="danger">Удалить</button>
+              </form>
+            </li>
+          {% endfor %}
+        </ul>
+      {% else %}
+        <p>Пользователи не найдены.</p>
+      {% endif %}
+    </article>
+  {% endif %}
+</section>
+{% endblock %}
