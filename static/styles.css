@@ -1,578 +1,264 @@
-import os
-import sqlite3
-from datetime import datetime, timedelta
-from functools import wraps
-
-from flask import Flask, flash, g, redirect, render_template, request, session, url_for
-from werkzeug.security import check_password_hash, generate_password_hash
-
-BASE_DIR = os.path.abspath(os.path.dirname(__file__))
-DATABASE = os.path.join(BASE_DIR, "app.db")
-ADMIN_SECRET_CODE = os.getenv("ADMIN_SECRET_CODE", "SUPER-ADMIN-123")
-SLOT_HOURS = (10, 12, 14)
-
-app = Flask(__name__)
-app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
-app.config["DB_READY"] = False
-
-
-@app.template_filter("ru_datetime")
-def ru_datetime(value: str):
-    try:
-        dt = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return value
-    return dt.strftime("%d.%m.%Y %H:%M")
-
-
-def get_db():
-    if "db" not in g:
-        g.db = sqlite3.connect(DATABASE)
-        g.db.row_factory = sqlite3.Row
-    return g.db
-
-
-@app.teardown_appcontext
-def close_db(_error=None):
-    db = g.pop("db", None)
-    if db is not None:
-        db.close()
-
-
-def init_db():
-    db = get_db()
-    db.executescript(
-        """
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            first_name TEXT NOT NULL,
-            last_name TEXT NOT NULL,
-            address TEXT NOT NULL,
-            phone TEXT NOT NULL UNIQUE,
-            password_hash TEXT NOT NULL,
-            is_admin INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL
-        );
-
-        CREATE TABLE IF NOT EXISTS slots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            slot_datetime TEXT NOT NULL UNIQUE,
-            status TEXT NOT NULL CHECK(status IN ('free', 'blocked', 'booked')) DEFAULT 'free',
-            booked_by INTEGER,
-            created_at TEXT NOT NULL,
-            FOREIGN KEY(booked_by) REFERENCES users(id)
-        );
-
-        CREATE TABLE IF NOT EXISTS settings (
-            key TEXT PRIMARY KEY,
-            value TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        """
-    )
-    db.execute(
-        """
-        INSERT OR IGNORE INTO settings (key, value, updated_at)
-        VALUES ('admin_secret_code', ?, ?)
-        """,
-        (ADMIN_SECRET_CODE, datetime.utcnow().isoformat()),
-    )
-    db.commit()
-
-    refresh_slots(db)
-    db.commit()
-    app.config["DB_READY"] = True
-
-
-def refresh_slots(db):
-    now = datetime.utcnow()
-    db.execute("DELETE FROM slots WHERE slot_datetime < ?", (now.isoformat(),))
-    db.execute(
-        """
-        DELETE FROM slots
-        WHERE status != 'booked'
-          AND (
-            CAST(strftime('%H', slot_datetime) AS INTEGER) NOT IN (10, 12, 14)
-            OR strftime('%M', slot_datetime) != '00'
-          )
-        """
-    )
-
-    seed_default_slots(db, now)
-
-
-def seed_default_slots(db, now: datetime):
-    now = now.replace(minute=0, second=0, microsecond=0)
-    start = now
-    slots_to_add = []
-
-    for day in range(0, 14):
-        day_time = start + timedelta(days=day)
-        for hour in SLOT_HOURS:
-            dt = day_time.replace(hour=hour)
-            slots_to_add.append((dt.isoformat(), "free", None, datetime.utcnow().isoformat()))
-
-    db.executemany(
-        """
-        INSERT OR IGNORE INTO slots (slot_datetime, status, booked_by, created_at)
-        VALUES (?, ?, ?, ?)
-        """,
-        slots_to_add,
-    )
-
-
-def login_required(view):
-    @wraps(view)
-    def wrapped_view(**kwargs):
-        if session.get("user_id") is None:
-            return redirect(url_for("login"))
-        return view(**kwargs)
-
-    return wrapped_view
-
-
-def admin_required(view):
-    @wraps(view)
-    def wrapped_view(**kwargs):
-        if session.get("user_id") is None:
-            return redirect(url_for("login"))
-        if not session.get("is_admin"):
-            flash("Доступ только для администратора.", "error")
-            return redirect(url_for("dashboard"))
-        return view(**kwargs)
-
-    return wrapped_view
-
-
-@app.before_request
-def load_logged_in_user():
-    if not app.config.get("DB_READY"):
-        init_db()
-    else:
-        refresh_slots(get_db())
-        get_db().commit()
-
-    user_id = session.get("user_id")
-    g.user = None
-
-    if user_id is not None:
-        g.user = get_db().execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-
-
-@app.route("/")
-def index():
-    if session.get("user_id"):
-        return redirect(url_for("dashboard"))
-    return redirect(url_for("login"))
-
-
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    if request.method == "POST":
-        first_name = request.form.get("first_name", "").strip()
-        last_name = request.form.get("last_name", "").strip()
-        address = request.form.get("address", "").strip()
-        phone = request.form.get("phone", "").strip()
-        password = request.form.get("password", "")
-        make_admin = request.form.get("is_admin") == "on"
-        admin_code = request.form.get("admin_code", "").strip()
-
-        error = None
-
-        db = get_db()
-        valid_admin_secret = get_admin_secret_code(db)
-
-        if not first_name or not last_name or not address or not phone or not password:
-            error = "Заполните все обязательные поля."
-        elif make_admin and admin_code != valid_admin_secret:
-            error = "Неверный секретный код для создания админ-аккаунта."
-
-        if error is None:
-            try:
-                db.execute(
-                    """
-                    INSERT INTO users (first_name, last_name, address, phone, password_hash, is_admin, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        first_name,
-                        last_name,
-                        address,
-                        phone,
-                        generate_password_hash(password),
-                        1 if make_admin else 0,
-                        datetime.utcnow().isoformat(),
-                    ),
-                )
-                db.commit()
-            except sqlite3.IntegrityError:
-                error = "Пользователь с таким номером телефона уже существует."
-            else:
-                flash("Регистрация успешна. Теперь войдите в аккаунт.", "success")
-                return redirect(url_for("login"))
-
-        flash(error, "error")
-
-    return render_template("register.html")
-
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        phone = request.form.get("phone", "").strip()
-        password = request.form.get("password", "")
-
-        db = get_db()
-        user = db.execute("SELECT * FROM users WHERE phone = ?", (phone,)).fetchone()
-
-        if user is None or not check_password_hash(user["password_hash"], password):
-            flash("Неверный номер телефона или пароль.", "error")
-        else:
-            session.clear()
-            session["user_id"] = user["id"]
-            session["is_admin"] = bool(user["is_admin"])
-            flash("Вы успешно вошли.", "success")
-            return redirect(url_for("dashboard"))
-
-    return render_template("login.html")
-
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    flash("Вы вышли из аккаунта.", "success")
-    return redirect(url_for("login"))
-
-
-@app.route("/dashboard")
-@login_required
-def dashboard():
-    db = get_db()
-    today = datetime.utcnow().date().isoformat()
-    calendar_days = build_calendar_days(db, today)
-
-    blocked_slots = []
-    if session.get("is_admin"):
-        my_bookings = db.execute(
-            """
-            SELECT s.*, u.first_name, u.last_name, u.phone
-            FROM slots s
-            LEFT JOIN users u ON s.booked_by = u.id
-            WHERE s.status = 'booked'
-            ORDER BY s.slot_datetime
-            """
-        ).fetchall()
-    else:
-        my_bookings = db.execute(
-            """
-            SELECT * FROM slots
-            WHERE status = 'booked' AND booked_by = ?
-            ORDER BY slot_datetime
-            """,
-            (session["user_id"],),
-        ).fetchall()
-
-    if session.get("is_admin"):
-        blocked_slots = db.execute(
-            "SELECT * FROM slots WHERE status = 'blocked' ORDER BY slot_datetime"
-        ).fetchall()
-        current_secret_code = get_admin_secret_code(db)
-    else:
-        current_secret_code = ""
-
-    return render_template(
-        "dashboard.html",
-        calendar_days=calendar_days,
-        my_bookings=my_bookings,
-        blocked_slots=blocked_slots,
-        current_secret_code=current_secret_code,
-    )
-
-
-@app.route("/book/<int:slot_id>", methods=["POST"])
-@login_required
-def book_slot(slot_id):
-    db = get_db()
-    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
-    today = datetime.utcnow().date().isoformat()
-
-    if slot is None:
-        flash("Слот не найден.", "error")
-    elif slot["slot_datetime"][:10] == today:
-        flash("Запись на занятия в текущий день недоступна.", "error")
-    elif slot["status"] != "free":
-        flash("Этот слот уже недоступен.", "error")
-    else:
-        db.execute(
-            "UPDATE slots SET status = 'booked', booked_by = ? WHERE id = ?",
-            (session["user_id"], slot_id),
-        )
-        db.commit()
-        flash("Вы успешно записались.", "success")
-
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/cancel/<int:slot_id>", methods=["POST"])
-@login_required
-def cancel_slot(slot_id):
-    db = get_db()
-    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
-
-    if slot is None:
-        flash("Слот не найден.", "error")
-    elif slot["status"] != "booked" or (
-        slot["booked_by"] != session["user_id"] and not session.get("is_admin")
-    ):
-        flash("Нельзя отменить эту запись.", "error")
-    else:
-        db.execute("UPDATE slots SET status = 'free', booked_by = NULL WHERE id = ?", (slot_id,))
-        db.commit()
-        flash("Запись отменена.", "success")
-
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/delete/<int:slot_id>", methods=["POST"])
-@login_required
-def delete_slot(slot_id):
-    db = get_db()
-    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
-
-    if slot is None:
-        flash("Слот не найден.", "error")
-    elif slot["status"] != "booked" or slot["booked_by"] != session["user_id"]:
-        flash("Нельзя удалить эту запись.", "error")
-    else:
-        db.execute("UPDATE slots SET status = 'free', booked_by = NULL WHERE id = ?", (slot_id,))
-        db.commit()
-        flash("Ваша запись удалена из списка — слот снова свободен.", "success")
-
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/admin/block/<int:slot_id>", methods=["POST"])
-@admin_required
-def block_slot(slot_id):
-    db = get_db()
-    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
-
-    if slot is None:
-        flash("Слот не найден.", "error")
-    elif slot["status"] == "booked":
-        flash("Нельзя блокировать уже занятую запись.", "error")
-    else:
-        db.execute("UPDATE slots SET status = 'blocked', booked_by = NULL WHERE id = ?", (slot_id,))
-        db.commit()
-        flash("Слот заблокирован.", "success")
-
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/admin/unblock/<int:slot_id>", methods=["POST"])
-@admin_required
-def unblock_slot(slot_id):
-    db = get_db()
-    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
-
-    if slot is None:
-        flash("Слот не найден.", "error")
-    elif slot["status"] != "blocked":
-        flash("Этот слот не заблокирован.", "error")
-    else:
-        db.execute("UPDATE slots SET status = 'free' WHERE id = ?", (slot_id,))
-        db.commit()
-        flash("Слот разблокирован.", "success")
-
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/admin/add-slot", methods=["POST"])
-@admin_required
-def add_slot():
-    slot_datetime = request.form.get("slot_datetime", "").strip()
-    if not slot_datetime:
-        flash("Укажите дату и время.", "error")
-        return redirect(url_for("dashboard"))
-
-    try:
-        dt = datetime.fromisoformat(slot_datetime)
-    except ValueError:
-        flash("Неверный формат даты и времени.", "error")
-        return redirect(url_for("dashboard"))
-
-    db = get_db()
-    try:
-        db.execute(
-            """
-            INSERT INTO slots (slot_datetime, status, booked_by, created_at)
-            VALUES (?, 'free', NULL, ?)
-            """,
-            (dt.isoformat(), datetime.utcnow().isoformat()),
-        )
-        db.commit()
-        flash("Новый слот добавлен.", "success")
-    except sqlite3.IntegrityError:
-        flash("Такой слот уже существует.", "error")
-
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/admin/update-secret-code", methods=["POST"])
-@admin_required
-def update_admin_secret_code():
-    old_code = request.form.get("old_admin_code", "").strip()
-    new_code = request.form.get("new_admin_code", "").strip()
-    db = get_db()
-    current_code = get_admin_secret_code(db)
-
-    if old_code != current_code:
-        flash("Старый секретный код введен неверно.", "error")
-        return redirect(url_for("dashboard"))
-
-    if not new_code:
-        flash("Новый секретный код не может быть пустым.", "error")
-        return redirect(url_for("dashboard"))
-
-    db.execute(
-        """
-        UPDATE settings
-        SET value = ?, updated_at = ?
-        WHERE key = 'admin_secret_code'
-        """,
-        (new_code, datetime.utcnow().isoformat()),
-    )
-    db.commit()
-    flash("Секретный код для регистрации админа обновлен.", "success")
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/admin/users")
-@admin_required
-def admin_users():
-    db = get_db()
-    users = db.execute(
-        """
-        SELECT id, first_name, last_name, phone, address, is_admin, created_at
-        FROM users
-        ORDER BY created_at DESC
-        """
-    ).fetchall()
-    return render_template("admin_users.html", users=users)
-
-
-@app.route("/admin/block-day", methods=["POST"])
-@admin_required
-def block_day():
-    date_str = request.form.get("date", "").strip()
-    if not date_str:
-        flash("Дата для блокировки не передана.", "error")
-        return redirect(url_for("dashboard"))
-
-    db = get_db()
-    db.execute(
-        """
-        UPDATE slots
-        SET status = 'blocked', booked_by = NULL
-        WHERE date(slot_datetime) = date(?) AND status != 'booked'
-        """,
-        (date_str,),
-    )
-    db.commit()
-    flash(f"Все свободные слоты на {date_str} заблокированы.", "success")
-    return redirect(url_for("dashboard"))
-
-
-@app.route("/admin/users/delete/<int:user_id>", methods=["POST"])
-@admin_required
-def delete_user(user_id):
-    db = get_db()
-    user = db.execute("SELECT * FROM users WHERE id = ?", (user_id,)).fetchone()
-
-    if user is None:
-        flash("Пользователь не найден.", "error")
-        return redirect(url_for("dashboard"))
-
-    if user["id"] == session["user_id"]:
-        flash("Нельзя удалить свою учетную запись администратора.", "error")
-        return redirect(url_for("dashboard"))
-
-    db.execute(
-        "UPDATE slots SET status = 'free', booked_by = NULL WHERE booked_by = ?",
-        (user_id,),
-    )
-    db.execute("DELETE FROM users WHERE id = ?", (user_id,))
-    db.commit()
-    flash("Пользователь удален.", "success")
-    return redirect(url_for("dashboard"))
-
-
-def get_admin_secret_code(db):
-    row = db.execute(
-        "SELECT value FROM settings WHERE key = 'admin_secret_code'"
-    ).fetchone()
-    if row is None:
-        return ADMIN_SECRET_CODE
-    return row["value"]
-
-
-def build_calendar_days(db, today_iso):
-    rows = db.execute(
-        """
-        SELECT id, slot_datetime, status
-        FROM slots
-        WHERE date(slot_datetime) >= date(?)
-        ORDER BY slot_datetime
-        """,
-        (today_iso,),
-    ).fetchall()
-
-    grouped = {}
-    for row in rows:
-        date_key = row["slot_datetime"][:10]
-        grouped.setdefault(date_key, []).append(row)
-
-    calendar_days = []
-    for date_key, day_slots in grouped.items():
-        free_count = sum(1 for slot in day_slots if slot["status"] == "free")
-        blocked_count = sum(1 for slot in day_slots if slot["status"] == "blocked")
-        booked_count = sum(1 for slot in day_slots if slot["status"] == "booked")
-
-        if date_key == today_iso:
-            day_status = "today-locked"
-        elif free_count > 0:
-            day_status = "free"
-        elif booked_count == len(day_slots):
-            day_status = "full"
-        elif blocked_count == len(day_slots):
-            day_status = "blocked"
-        else:
-            day_status = "mixed"
-
-        calendar_days.append(
-            {
-                "date": date_key,
-                "date_label": format_day_label(date_key),
-                "weekday_label": weekday_label(date_key),
-                "status": day_status,
-                "slots": day_slots,
-            }
-        )
-    return calendar_days
-
-
-def format_day_label(date_iso):
-    dt = datetime.fromisoformat(date_iso)
-    return dt.strftime("%d.%m")
-
-
-def weekday_label(date_iso):
-    weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
-    dt = datetime.fromisoformat(date_iso)
-    return weekdays[dt.weekday()]
-
-
-if __name__ == "__main__":
-    with app.app_context():
-        init_db()
-    app.run(debug=True, host="0.0.0.0", port=5000)
+body {
+  margin: 0;
+  font-family: Arial, sans-serif;
+  background-color: #0b1020;
+  color: #e5e7eb;
+}
+
+.topbar {
+  background: #111827;
+  color: #f9fafb;
+  padding: 14px 18px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid #374151;
+}
+
+.topbar a {
+  color: #93c5fd;
+  margin-left: 12px;
+  text-decoration: none;
+}
+
+.container {
+  max-width: 960px;
+  margin: 24px auto;
+  padding: 0 16px;
+}
+
+.grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  justify-content: center;
+}
+
+.wide-card {
+  grid-column: 1 / -1;
+}
+
+.card {
+  background: #111827;
+  border-radius: 10px;
+  padding: 16px;
+  border: 1px solid #374151;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.25);
+}
+
+.form-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.form-grid input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px;
+  border-radius: 8px;
+  border: 1px solid #4b5563;
+  background: #0f172a;
+  color: #f9fafb;
+}
+
+.inline-form {
+  display: inline-block;
+  margin-left: 8px;
+}
+
+button {
+  background: #2563eb;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+  cursor: pointer;
+}
+
+button.danger {
+  background: #dc2626;
+}
+
+.messages {
+  list-style: none;
+  padding: 0;
+}
+
+.messages li {
+  margin-bottom: 8px;
+  padding: 8px;
+  border-radius: 5px;
+}
+
+.messages .success {
+  background: #064e3b;
+}
+
+.messages .error {
+  background: #7f1d1d;
+}
+
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+ul {
+  padding-left: 18px;
+}
+
+li {
+  margin-bottom: 10px;
+}
+
+.badge {
+  font-size: 12px;
+  padding: 2px 6px;
+  border: 1px solid #60a5fa;
+  color: #60a5fa;
+  border-radius: 999px;
+  margin-left: 6px;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+  font-size: 14px;
+}
+
+.dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  margin-right: 5px;
+}
+
+.dot.free { background: #16a34a; }
+.dot.full { background: #dc2626; }
+.dot.blocked { background: #7c3aed; }
+.dot.today-locked { background: #f59e0b; }
+
+.calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.calendar-day {
+  border: 1px solid #4b5563;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #e5e7eb;
+  text-align: left;
+  padding: 10px;
+}
+
+.weekday {
+  font-size: 12px;
+  opacity: 0.8;
+  display: block;
+}
+
+.calendar-day.free { border-color: #16a34a; }
+.calendar-day.full { border-color: #dc2626; }
+.calendar-day.blocked { border-color: #7c3aed; }
+.calendar-day.today-locked { border-color: #f59e0b; }
+.calendar-day.mixed { border-color: #60a5fa; }
+
+.date-number {
+  display: block;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+
+.date-status {
+  font-size: 12px;
+  opacity: 0.9;
+}
+
+.modal[hidden] {
+  display: none;
+}
+
+.modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: grid;
+  place-items: center;
+  z-index: 999;
+  padding: 12px;
+}
+
+.modal-content {
+  width: min(560px, 100%);
+  position: relative;
+}
+
+.close-btn {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  background: transparent;
+  border: 1px solid #4b5563;
+}
+
+.button-link {
+  display: inline-block;
+  background: #2563eb;
+  color: #fff;
+  text-decoration: none;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.table-wrap {
+  overflow-x: auto;
+}
+
+.users-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.users-table th,
+.users-table td {
+  border: 1px solid #374151;
+  padding: 8px;
+  text-align: left;
+}
+
+.users-table thead {
+  background: #1f2937;
+}
+
+.block-day-item {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #374151;
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+  }
+
+  .container {
+    padding: 0 10px;
+  }
+
+  .card {
+    padding: 14px;
+  }
+
+  .inline-form {
+    display: block;
+    margin: 6px 0 0 0;
+  }
+}
