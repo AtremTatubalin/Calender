@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}Мой аккаунт{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card">
+    <h2>Мой аккаунт</h2>
+    <ul class="account-data">
+      <li><strong>Имя:</strong> {{ g.user.first_name }}</li>
+      <li><strong>Фамилия:</strong> {{ g.user.last_name }}</li>
+      <li><strong>Телефон:</strong> {{ g.user.phone }}</li>
+      <li><strong>Адрес:</strong> {{ g.user.address }}</li>
+      <li><strong>Роль:</strong> {{ 'Администратор' if g.user.is_admin else 'Пользователь' }}</li>
+      <li><strong>Дата регистрации:</strong> {{ g.user.created_at | ru_datetime }}</li>
+    </ul>
+  </article>
+
+  <article class="card danger-zone">
+    <h2>Удаление учетной записи</h2>
+    <p>После удаления ваши данные и записи будут удалены без возможности восстановления.</p>
+    <form method="post" action="{{ url_for('delete_account') }}" class="form-grid" id="delete-account-form">
+      <input type="hidden" name="confirm_delete" value="yes" />
+      <label>Введите пароль для подтверждения
+        <input type="password" name="password" required />
+      </label>
+      <button type="submit" class="danger">Удалить учетную запись</button>
+    </form>
+  </article>
+</section>
+
+<script>
+  const deleteForm = document.getElementById('delete-account-form');
+  deleteForm.addEventListener('submit', (event) => {
+    const accepted = window.confirm('Вы точно хотите удалить учетную запись? Это действие нельзя отменить.');
+    if (!accepted) {
+      event.preventDefault();
+    }
+  });
+</script>
+{% endblock %}
