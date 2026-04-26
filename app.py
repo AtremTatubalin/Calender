@@ -256,6 +256,11 @@ def logout():
     return redirect(url_for("login"))
 
 
+@app.route("/pwa-guide")
+def pwa_guide():
+    return render_template("pwa_guide.html")
+
+
 @app.route("/account")
 @login_required
 def account():

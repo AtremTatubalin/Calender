@@ -1,0 +1,18 @@
+{
+  "name": "PRO PDD",
+  "short_name": "PRO PDD",
+  "description": "Приложение для записи на занятия",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0b1020",
+  "theme_color": "#111827",
+  "icons": [
+    {
+      "src": "/static/pro-pdd-favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

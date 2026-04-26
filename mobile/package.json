@@ -1,0 +1,21 @@
+{
+  "name": "pro-pdd-mobile-wrapper",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Capacitor wrapper for PRO PDD Flask web app",
+  "scripts": {
+    "cap:init": "npx cap init \"PRO PDD\" com.propdd.app --web-dir=www",
+    "cap:add:android": "npx cap add android",
+    "cap:add:ios": "npx cap add ios",
+    "cap:sync": "npx cap sync",
+    "open:android": "npx cap open android",
+    "open:ios": "npx cap open ios"
+  },
+  "devDependencies": {
+    "@capacitor/android": "^7.4.3",
+    "@capacitor/cli": "^7.4.3",
+    "@capacitor/core": "^7.4.3",
+    "@capacitor/ios": "^7.4.3",
+    "typescript": "^5.9.3"
+  }
+}
