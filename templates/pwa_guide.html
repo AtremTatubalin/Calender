@@ -1,0 +1,39 @@
+{% extends 'base.html' %}
+{% block title %}Установка приложения{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card wide-card">
+    <h2>Как установить приложение на телефон</h2>
+    <p>Сайт поддерживает формат PWA (Progressive Web App). Его можно установить как обычное приложение на Android и iPhone.</p>
+  </article>
+
+  <article class="card">
+    <h3>Android (Chrome)</h3>
+    <ol>
+      <li>Откройте сайт в Chrome.</li>
+      <li>Нажмите меню браузера (⋮).</li>
+      <li>Выберите <strong>«Установить приложение»</strong> или <strong>«Добавить на главный экран»</strong>.</li>
+      <li>Подтвердите установку.</li>
+    </ol>
+  </article>
+
+  <article class="card">
+    <h3>iPhone (Safari)</h3>
+    <ol>
+      <li>Откройте сайт в Safari.</li>
+      <li>Нажмите кнопку <strong>«Поделиться»</strong>.</li>
+      <li>Выберите <strong>«На экран Домой»</strong>.</li>
+      <li>Подтвердите добавление.</li>
+    </ol>
+  </article>
+
+  <article class="card wide-card">
+    <h3>Важно</h3>
+    <ul>
+      <li>Для корректной установки сайт должен открываться по HTTPS.</li>
+      <li>После установки приложение запускается с иконки на домашнем экране.</li>
+      <li>Если кнопки установки не видно — обновите страницу и попробуйте снова.</li>
+    </ul>
+  </article>
+</section>
+{% endblock %}

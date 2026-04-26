@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="PRO PDD">
+  <rect width="64" height="64" rx="10" fill="#1b1526"/>
+  <polygon points="32,8 46,50 18,50" fill="#f1f5f9" stroke="#ea580c" stroke-width="4"/>
+  <rect x="22" y="22" width="20" height="8" fill="#ea580c"/>
+  <rect x="24" y="38" width="16" height="7" fill="#ea580c"/>
+</svg>

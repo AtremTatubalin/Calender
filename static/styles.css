@@ -112,6 +112,24 @@ li {
   margin-bottom: 10px;
 }
 
+.account-data {
+  list-style: none;
+  padding-left: 0;
+}
+
+.account-data li {
+  padding: 8px 0;
+  border-bottom: 1px solid #374151;
+}
+
+.danger-zone {
+  border-color: #7f1d1d;
+}
+
+.danger-zone h2 {
+  color: #fca5a5;
+}
+
 .badge {
   font-size: 12px;
   padding: 2px 6px;

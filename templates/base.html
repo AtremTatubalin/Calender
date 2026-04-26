@@ -3,7 +3,11 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#111827" />
     <title>{% block title %}Система записи{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='pro-pdd-favicon.svg') }}" />
+    <link rel="manifest" href="{{ url_for('static', filename='manifest.webmanifest') }}" />
+    <link rel="apple-touch-icon" href="{{ url_for('static', filename='pro-pdd-favicon.svg') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body>
@@ -11,11 +15,14 @@
       <h1>Приложение для записи на занятия</h1>
       <nav>
         {% if session.get('user_id') %}
+          <a href="{{ url_for('dashboard') }}">Запись</a>
+          <a href="{{ url_for('account') }}">Мой аккаунт</a>
           <a href="{{ url_for('logout') }}">Выйти</a>
         {% else %}
           <a href="{{ url_for('login') }}">Вход</a>
           <a href="{{ url_for('register') }}">Регистрация</a>
         {% endif %}
+        <a href="{{ url_for('pwa_guide') }}">Установить приложение</a>
       </nav>
     </header>
 
@@ -32,5 +39,12 @@
 
       {% block content %}{% endblock %}
     </main>
+    <script>
+      if ('serviceWorker' in navigator) {
+        window.addEventListener('load', () => {
+          navigator.serviceWorker.register("{{ url_for('static', filename='sw.js') }}");
+        });
+      }
+    </script>
   </body>
 </html>
