@@ -5,7 +5,14 @@
   <h2>Вход</h2>
   <form method="post" class="form-grid">
     <label>Номер телефона
-      <input type="text" name="phone" required placeholder="+79991234567" pattern="^\+7\d{10}$" />
+      <input
+        type="text"
+        name="phone"
+        required
+        placeholder="+79991234567"
+        pattern="^\+7\d{10}$"
+        data-phone-mask
+      />
     </label>
 
     <label>Пароль
@@ -15,4 +22,23 @@
     <button type="submit">Войти</button>
   </form>
 </section>
+<script>
+  const phoneInput = document.querySelector('[data-phone-mask]');
+  if (phoneInput) {
+    if (!phoneInput.value) phoneInput.value = '+7';
+
+    phoneInput.addEventListener('input', () => {
+      let digits = phoneInput.value.replace(/\D/g, '');
+      if (digits.startsWith('7')) digits = digits.slice(1);
+      digits = digits.slice(0, 10);
+      phoneInput.value = `+7${digits}`;
+    });
+
+    phoneInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Backspace' && phoneInput.selectionStart <= 2 && phoneInput.selectionEnd <= 2) {
+        event.preventDefault();
+      }
+    });
+  }
+</script>
 {% endblock %}

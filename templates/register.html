@@ -17,7 +17,14 @@
     </label>
 
     <label>Номер телефона
-      <input type="text" name="phone" required placeholder="+79991234567" pattern="^\+7\d{10}$" />
+      <input
+        type="text"
+        name="phone"
+        required
+        placeholder="+79991234567"
+        pattern="^\+7\d{10}$"
+        data-phone-mask
+      />
     </label>
 
     <label>Пароль
@@ -40,6 +47,26 @@
   const adminCheckbox = document.getElementById('is_admin');
   const adminField = document.getElementById('admin-code-field');
   const adminInput = document.getElementById('admin_code');
+  const phoneInput = document.querySelector('[data-phone-mask]');
+
+  if (phoneInput && !phoneInput.value) {
+    phoneInput.value = '+7';
+  }
+
+  if (phoneInput) {
+    phoneInput.addEventListener('input', () => {
+      let digits = phoneInput.value.replace(/\D/g, '');
+      if (digits.startsWith('7')) digits = digits.slice(1);
+      digits = digits.slice(0, 10);
+      phoneInput.value = `+7${digits}`;
+    });
+
+    phoneInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Backspace' && phoneInput.selectionStart <= 2 && phoneInput.selectionEnd <= 2) {
+        event.preventDefault();
+      }
+    });
+  }
 
   adminCheckbox.addEventListener('change', () => {
     if (adminCheckbox.checked) {

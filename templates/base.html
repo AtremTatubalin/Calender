@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>{% block title %}Система записи{% endblock %}</title>
+    <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='pro-pdd-favicon.svg') }}" />
     <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}" />
   </head>
   <body>
@@ -11,6 +12,7 @@
       <h1>Приложение для записи на занятия</h1>
       <nav>
         {% if session.get('user_id') %}
+          <a href="{{ url_for('dashboard') }}">Запись</a>
           <a href="{{ url_for('account') }}">Мой аккаунт</a>
           <a href="{{ url_for('logout') }}">Выйти</a>
         {% else %}
