@@ -1,4 +1,5 @@
 import os
+import re
 import sqlite3
 from datetime import datetime, timedelta
 from functools import wraps
@@ -10,6 +11,7 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATABASE = os.path.join(BASE_DIR, "app.db")
 ADMIN_SECRET_CODE = os.getenv("ADMIN_SECRET_CODE", "SUPER-ADMIN-123")
 SLOT_HOURS = (10, 12, 14)
+PHONE_REGEX = re.compile(r"^\+7\d{10}$")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
@@ -131,6 +133,10 @@ def login_required(view):
     return wrapped_view
 
 
+def is_valid_phone(phone: str) -> bool:
+    return bool(PHONE_REGEX.fullmatch(phone))
+
+
 def admin_required(view):
     @wraps(view)
     def wrapped_view(**kwargs):
@@ -184,6 +190,8 @@ def register():
 
         if not first_name or not last_name or not address or not phone or not password:
             error = "Заполните все обязательные поля."
+        elif not is_valid_phone(phone):
+            error = "Номер телефона должен быть в формате +7XXXXXXXXXX."
         elif make_admin and admin_code != valid_admin_secret:
             error = "Неверный секретный код для создания админ-аккаунта."
 
@@ -222,6 +230,10 @@ def login():
         phone = request.form.get("phone", "").strip()
         password = request.form.get("password", "")
 
+        if not is_valid_phone(phone):
+            flash("Номер телефона должен быть в формате +7XXXXXXXXXX.", "error")
+            return render_template("login.html")
+
         db = get_db()
         user = db.execute("SELECT * FROM users WHERE phone = ?", (phone,)).fetchone()
 
@@ -241,6 +253,38 @@ def login():
 def logout():
     session.clear()
     flash("Вы вышли из аккаунта.", "success")
+    return redirect(url_for("login"))
+
+
+@app.route("/account")
+@login_required
+def account():
+    return render_template("account.html")
+
+
+@app.route("/account/delete", methods=["POST"])
+@login_required
+def delete_account():
+    password = request.form.get("password", "")
+    confirm = request.form.get("confirm_delete", "") == "yes"
+
+    if not confirm:
+        flash("Подтвердите удаление учетной записи.", "error")
+        return redirect(url_for("account"))
+
+    if g.user is None or not check_password_hash(g.user["password_hash"], password):
+        flash("Неверный пароль. Удаление отменено.", "error")
+        return redirect(url_for("account"))
+
+    db = get_db()
+    db.execute(
+        "UPDATE slots SET status = 'free', booked_by = NULL WHERE booked_by = ?",
+        (g.user["id"],),
+    )
+    db.execute("DELETE FROM users WHERE id = ?", (g.user["id"],))
+    db.commit()
+    session.clear()
+    flash("Учетная запись удалена.", "success")
     return redirect(url_for("login"))
 
 
