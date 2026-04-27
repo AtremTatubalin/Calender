@@ -70,6 +70,20 @@ def init_db():
             value TEXT NOT NULL,
             updated_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS lesson_statistics (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            source_slot_id INTEGER NOT NULL,
+            slot_datetime TEXT NOT NULL,
+            user_id INTEGER NOT NULL,
+            first_name TEXT NOT NULL,
+            last_name TEXT NOT NULL,
+            phone TEXT NOT NULL,
+            address TEXT NOT NULL,
+            added_at TEXT NOT NULL,
+            FOREIGN KEY(source_slot_id) REFERENCES slots(id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
         """
     )
     db.execute(
@@ -88,7 +102,10 @@ def init_db():
 
 def refresh_slots(db):
     now = datetime.utcnow()
-    db.execute("DELETE FROM slots WHERE slot_datetime < ?", (now.isoformat(),))
+    db.execute(
+        "DELETE FROM slots WHERE slot_datetime < ? AND status != 'booked'",
+        (now.isoformat(),),
+    )
     db.execute(
         """
         DELETE FROM slots
@@ -299,6 +316,7 @@ def dashboard():
     db = get_db()
     today = datetime.utcnow().date().isoformat()
     calendar_days = build_calendar_days(db, today)
+    now_iso = datetime.utcnow().isoformat()
 
     blocked_slots = []
     if session.get("is_admin"):
@@ -311,6 +329,9 @@ def dashboard():
             ORDER BY s.slot_datetime
             """
         ).fetchall()
+        my_bookings = [
+            {**dict(slot), "is_past": slot["slot_datetime"] < now_iso} for slot in my_bookings
+        ]
     else:
         my_bookings = db.execute(
             """
@@ -378,6 +399,71 @@ def cancel_slot(slot_id):
         db.execute("UPDATE slots SET status = 'free', booked_by = NULL WHERE id = ?", (slot_id,))
         db.commit()
         flash("Запись отменена.", "success")
+
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/admin/add-to-statistics/<int:slot_id>", methods=["POST"])
+@admin_required
+def add_to_statistics(slot_id):
+    db = get_db()
+    slot = db.execute(
+        """
+        SELECT s.*, u.first_name, u.last_name, u.phone, u.address
+        FROM slots s
+        LEFT JOIN users u ON s.booked_by = u.id
+        WHERE s.id = ?
+        """,
+        (slot_id,),
+    ).fetchone()
+
+    if slot is None:
+        flash("Слот не найден.", "error")
+    elif slot["status"] != "booked" or slot["booked_by"] is None:
+        flash("Этот слот нельзя добавить в статистику.", "error")
+    elif slot["slot_datetime"] >= datetime.utcnow().isoformat():
+        flash("Добавлять в статистику можно только прошедшие занятия.", "error")
+    else:
+        db.execute(
+            """
+            INSERT INTO lesson_statistics
+            (source_slot_id, slot_datetime, user_id, first_name, last_name, phone, address, added_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                slot["id"],
+                slot["slot_datetime"],
+                slot["booked_by"],
+                slot["first_name"],
+                slot["last_name"],
+                slot["phone"],
+                slot["address"],
+                datetime.utcnow().isoformat(),
+            ),
+        )
+        db.execute("UPDATE slots SET status = 'free', booked_by = NULL WHERE id = ?", (slot_id,))
+        db.commit()
+        flash("Занятие добавлено в статистику.", "success")
+
+    return redirect(url_for("dashboard"))
+
+
+@app.route("/admin/skip-statistics/<int:slot_id>", methods=["POST"])
+@admin_required
+def skip_statistics(slot_id):
+    db = get_db()
+    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+
+    if slot is None:
+        flash("Слот не найден.", "error")
+    elif slot["status"] != "booked":
+        flash("Этот слот уже обработан.", "error")
+    elif slot["slot_datetime"] >= datetime.utcnow().isoformat():
+        flash("Эта запись еще не завершена.", "error")
+    else:
+        db.execute("UPDATE slots SET status = 'free', booked_by = NULL WHERE id = ?", (slot_id,))
+        db.commit()
+        flash("Запись удалена без добавления в статистику.", "success")
 
     return redirect(url_for("dashboard"))
 
@@ -510,6 +596,47 @@ def admin_users():
     return render_template("admin_users.html", users=users)
 
 
+@app.route("/admin/statistics")
+@admin_required
+def admin_statistics():
+    db = get_db()
+    rows = db.execute(
+        """
+        SELECT slot_datetime, first_name, last_name, phone, address
+        FROM lesson_statistics
+        ORDER BY slot_datetime DESC
+        """
+    ).fetchall()
+
+    months = {}
+    for row in rows:
+        dt = datetime.fromisoformat(row["slot_datetime"])
+        month_key = dt.strftime("%Y-%m")
+        month_data = months.setdefault(
+            month_key,
+            {
+                "month_key": month_key,
+                "month_label": month_label_ru(dt),
+                "count": 0,
+                "items": [],
+            },
+        )
+        month_data["count"] += 1
+        month_data["items"].append(
+            {
+                "date": dt.strftime("%d.%m.%Y"),
+                "time": dt.strftime("%H:%M"),
+                "first_name": row["first_name"],
+                "last_name": row["last_name"],
+                "phone": row["phone"],
+                "address": row["address"],
+            }
+        )
+
+    month_stats = sorted(months.values(), key=lambda item: item["month_key"], reverse=True)
+    return render_template("admin_statistics.html", month_stats=month_stats)
+
+
 @app.route("/admin/block-day", methods=["POST"])
 @admin_required
 def block_day():
@@ -619,6 +746,24 @@ def weekday_label(date_iso):
     weekdays = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"]
     dt = datetime.fromisoformat(date_iso)
     return weekdays[dt.weekday()]
+
+
+def month_label_ru(dt: datetime):
+    months = [
+        "январь",
+        "февраль",
+        "март",
+        "апрель",
+        "май",
+        "июнь",
+        "июль",
+        "август",
+        "сентябрь",
+        "октябрь",
+        "ноябрь",
+        "декабрь",
+    ]
+    return f"{months[dt.month - 1].capitalize()} {dt.year}"
 
 
 if __name__ == "__main__":

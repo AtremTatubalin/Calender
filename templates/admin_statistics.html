@@ -1,0 +1,30 @@
+{% extends 'base.html' %}
+{% block title %}Статистика занятий{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card wide-card">
+    <h2>Статистика по месяцам</h2>
+    {% if month_stats %}
+      {% for month in month_stats %}
+        <details>
+          <summary>
+            <strong>{{ month.month_label }}</strong> — занятий: {{ month.count }}
+          </summary>
+          <ul>
+            {% for item in month.items %}
+              <li>
+                {{ item.date }} {{ item.time }} —
+                {{ item.first_name }} {{ item.last_name }},
+                {{ item.phone }},
+                {{ item.address }}
+              </li>
+            {% endfor %}
+          </ul>
+        </details>
+      {% endfor %}
+    {% else %}
+      <p>Пока нет занятий, добавленных в статистику.</p>
+    {% endif %}
+  </article>
+</section>
+{% endblock %}

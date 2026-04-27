@@ -69,16 +69,27 @@
             {{ slot.slot_datetime | ru_datetime }}
             {% if session.get('is_admin') %}
               — {{ slot.first_name }} {{ slot.last_name }} ({{ slot.phone }})
-            {% endif %}
-            <form method="post" action="{{ url_for('cancel_slot', slot_id=slot.id) }}" class="inline-form">
-              <button
-                type="submit"
-                {% if not session.get('is_admin') %}
+              {% if slot.is_past %}
+                <form method="post" action="{{ url_for('add_to_statistics', slot_id=slot.id) }}" class="inline-form">
+                  <button type="submit">Добавить в статистику</button>
+                </form>
+                <form method="post" action="{{ url_for('skip_statistics', slot_id=slot.id) }}" class="inline-form">
+                  <button type="submit" class="secondary">Не добавлять</button>
+                </form>
+              {% else %}
+                <form method="post" action="{{ url_for('cancel_slot', slot_id=slot.id) }}" class="inline-form">
+                  <button type="submit">Отменить</button>
+                </form>
+              {% endif %}
+            {% else %}
+              <form method="post" action="{{ url_for('cancel_slot', slot_id=slot.id) }}" class="inline-form">
+                <button
+                  type="submit"
                   class="booking-cancel-btn"
                   data-action="{{ url_for('cancel_slot', slot_id=slot.id) }}"
-                {% endif %}
-              >Отменить</button>
-            </form>
+                >Отменить</button>
+              </form>
+            {% endif %}
           </li>
         {% endfor %}
       </ul>
@@ -110,6 +121,7 @@
       <h2>Пользователи</h2>
       <p>Список пользователей вынесен на отдельную страницу в виде таблицы.</p>
       <a class="button-link" href="{{ url_for('admin_users') }}">Открыть страницу пользователей</a>
+      <a class="button-link" href="{{ url_for('admin_statistics') }}">Открыть страницу статистики</a>
     </article>
 
     <article class="card">
