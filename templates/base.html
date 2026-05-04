@@ -17,6 +17,7 @@
         {% if session.get('user_id') %}
           <a href="{{ url_for('dashboard') }}">Запись</a>
           {% if session.get('is_admin') %}
+            <a href="{{ url_for('admin_users') }}">Пользователи</a>
             <a href="{{ url_for('admin_statistics') }}">Статистика</a>
           {% endif %}
           <a href="{{ url_for('account') }}">Мой аккаунт</a>
