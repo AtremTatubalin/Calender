@@ -14,6 +14,23 @@
     </ul>
   </article>
 
+
+  <article class="card">
+    <h2>Редактировать профиль</h2>
+    <form method="post" action="{{ url_for('update_profile') }}" class="form-grid">
+      <label>Имя
+        <input type="text" name="first_name" value="{{ g.user.first_name }}" required />
+      </label>
+      <label>Фамилия
+        <input type="text" name="last_name" value="{{ g.user.last_name }}" required />
+      </label>
+      <label>Адрес
+        <input type="text" name="address" value="{{ g.user.address }}" required />
+      </label>
+      <button type="submit">Сохранить изменения</button>
+    </form>
+  </article>
+
   <article class="card danger-zone">
     <h2>Удаление учетной записи</h2>
     <p>После удаления ваши данные и записи будут удалены без возможности восстановления.</p>

@@ -17,12 +17,20 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 app.config["DB_READY"] = False
 
+def parse_iso_datetime(value):
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00") if isinstance(value, str) else value
+    try:
+        return datetime.fromisoformat(normalized)
+    except (TypeError, ValueError):
+        return None
+
 
 @app.template_filter("ru_datetime")
 def ru_datetime(value: str):
-    try:
-        dt = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
+    dt = parse_iso_datetime(value)
+    if not dt:
         return value
     return dt.strftime("%d.%m.%Y %H:%M")
 
@@ -282,6 +290,31 @@ def pwa_guide():
 @login_required
 def account():
     return render_template("account.html")
+
+
+@app.route("/account/update-profile", methods=["POST"])
+@login_required
+def update_profile():
+    first_name = request.form.get("first_name", "").strip()
+    last_name = request.form.get("last_name", "").strip()
+    address = request.form.get("address", "").strip()
+
+    if not first_name or not last_name or not address:
+        flash("Имя, фамилия и адрес не могут быть пустыми.", "error")
+        return redirect(url_for("account"))
+
+    db = get_db()
+    db.execute(
+        """
+        UPDATE users
+        SET first_name = ?, last_name = ?, address = ?
+        WHERE id = ?
+        """,
+        (first_name, last_name, address, g.user["id"]),
+    )
+    db.commit()
+    flash("Данные профиля обновлены.", "success")
+    return redirect(url_for("account"))
 
 
 @app.route("/account/delete", methods=["POST"])
@@ -610,7 +643,10 @@ def admin_statistics():
 
     months = {}
     for row in rows:
-        dt = datetime.fromisoformat(row["slot_datetime"])
+        dt = parse_iso_datetime(row["slot_datetime"])
+        if not dt:
+            continue
+
         month_key = dt.strftime("%Y-%m")
         month_data = months.setdefault(
             month_key,
@@ -681,6 +717,36 @@ def delete_user(user_id):
     db.commit()
     flash("Пользователь удален.", "success")
     return redirect(url_for("dashboard"))
+
+
+@app.route("/admin/users/update/<int:user_id>", methods=["POST"])
+@admin_required
+def admin_update_user(user_id):
+    first_name = request.form.get("first_name", "").strip()
+    last_name = request.form.get("last_name", "").strip()
+    address = request.form.get("address", "").strip()
+
+    if not first_name or not last_name or not address:
+        flash("Имя, фамилия и адрес не могут быть пустыми.", "error")
+        return redirect(url_for("admin_users"))
+
+    db = get_db()
+    user = db.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+    if user is None:
+        flash("Пользователь не найден.", "error")
+        return redirect(url_for("admin_users"))
+
+    db.execute(
+        """
+        UPDATE users
+        SET first_name = ?, last_name = ?, address = ?
+        WHERE id = ?
+        """,
+        (first_name, last_name, address, user_id),
+    )
+    db.commit()
+    flash("Данные пользователя обновлены.", "success")
+    return redirect(url_for("admin_users"))
 
 
 def get_admin_secret_code(db):

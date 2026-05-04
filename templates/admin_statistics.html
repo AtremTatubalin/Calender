@@ -11,7 +11,7 @@
             <strong>{{ month.month_label }}</strong> — занятий: {{ month.count }}
           </summary>
           <ul>
-            {% for item in month.items %}
+            {% for item in month["items"] %}
               <li>
                 {{ item.date }} {{ item.time }} —
                 {{ item.first_name }} {{ item.last_name }},
