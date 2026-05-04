@@ -292,6 +292,31 @@ def account():
     return render_template("account.html")
 
 
+@app.route("/account/update-profile", methods=["POST"])
+@login_required
+def update_profile():
+    first_name = request.form.get("first_name", "").strip()
+    last_name = request.form.get("last_name", "").strip()
+    address = request.form.get("address", "").strip()
+
+    if not first_name or not last_name or not address:
+        flash("Имя, фамилия и адрес не могут быть пустыми.", "error")
+        return redirect(url_for("account"))
+
+    db = get_db()
+    db.execute(
+        """
+        UPDATE users
+        SET first_name = ?, last_name = ?, address = ?
+        WHERE id = ?
+        """,
+        (first_name, last_name, address, g.user["id"]),
+    )
+    db.commit()
+    flash("Данные профиля обновлены.", "success")
+    return redirect(url_for("account"))
+
+
 @app.route("/account/delete", methods=["POST"])
 @login_required
 def delete_account():
@@ -692,6 +717,36 @@ def delete_user(user_id):
     db.commit()
     flash("Пользователь удален.", "success")
     return redirect(url_for("dashboard"))
+
+
+@app.route("/admin/users/update/<int:user_id>", methods=["POST"])
+@admin_required
+def admin_update_user(user_id):
+    first_name = request.form.get("first_name", "").strip()
+    last_name = request.form.get("last_name", "").strip()
+    address = request.form.get("address", "").strip()
+
+    if not first_name or not last_name or not address:
+        flash("Имя, фамилия и адрес не могут быть пустыми.", "error")
+        return redirect(url_for("admin_users"))
+
+    db = get_db()
+    user = db.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+    if user is None:
+        flash("Пользователь не найден.", "error")
+        return redirect(url_for("admin_users"))
+
+    db.execute(
+        """
+        UPDATE users
+        SET first_name = ?, last_name = ?, address = ?
+        WHERE id = ?
+        """,
+        (first_name, last_name, address, user_id),
+    )
+    db.commit()
+    flash("Данные пользователя обновлены.", "success")
+    return redirect(url_for("admin_users"))
 
 
 def get_admin_secret_code(db):

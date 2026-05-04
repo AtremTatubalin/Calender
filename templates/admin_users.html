@@ -16,7 +16,7 @@
             <th>Телефон</th>
             <th>Адрес</th>
             <th>Роль</th>
-            <th>Действие</th>
+            <th>Управление</th>
           </tr>
         </thead>
         <tbody>
@@ -29,6 +29,12 @@
               <td>{{ user.address }}</td>
               <td>{% if user.is_admin %}ADMIN{% else %}USER{% endif %}</td>
               <td>
+                <form method="post" action="{{ url_for('admin_update_user', user_id=user.id) }}" class="form-grid">
+                  <input type="text" name="first_name" value="{{ user.first_name }}" required />
+                  <input type="text" name="last_name" value="{{ user.last_name }}" required />
+                  <input type="text" name="address" value="{{ user.address }}" required />
+                  <button type="submit">Сохранить</button>
+                </form>
                 <form method="post" action="{{ url_for('delete_user', user_id=user.id) }}">
                   <button type="submit" class="danger">Удалить</button>
                 </form>
