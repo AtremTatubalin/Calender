@@ -17,12 +17,20 @@ app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
 app.config["DB_READY"] = False
 
+def parse_iso_datetime(value):
+    if not value:
+        return None
+    normalized = value.replace("Z", "+00:00") if isinstance(value, str) else value
+    try:
+        return datetime.fromisoformat(normalized)
+    except (TypeError, ValueError):
+        return None
+
 
 @app.template_filter("ru_datetime")
 def ru_datetime(value: str):
-    try:
-        dt = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
+    dt = parse_iso_datetime(value)
+    if not dt:
         return value
     return dt.strftime("%d.%m.%Y %H:%M")
 
@@ -610,7 +618,10 @@ def admin_statistics():
 
     months = {}
     for row in rows:
-        dt = datetime.fromisoformat(row["slot_datetime"])
+        dt = parse_iso_datetime(row["slot_datetime"])
+        if not dt:
+            continue
+
         month_key = dt.strftime("%Y-%m")
         month_data = months.setdefault(
             month_key,
