@@ -4,10 +4,10 @@
 <section class="grid">
   <article class="card wide-card">
     <h2>Связь</h2>
-    <p>Укажите почту получателя и SMTP-данные почты, с которой сайт будет отправлять уведомления.</p>
+    <p>Укажите почту получателя и данные Resend, через которые сайт будет отправлять уведомления.</p>
     <p>
-      Для Proton Mail обычный пароль от ящика часто не подходит для SMTP. Используйте пароль Proton Mail Bridge
-      или SMTP-токен, если он включен в вашем тарифе.
+      В Resend нужен API ключ. Поле отправителя должно быть адресом с подтвержденного домена Resend
+      или тестовым адресом <code>onboarding@resend.dev</code> для проверки.
     </p>
     <form method="post" action="{{ url_for('admin_connection') }}" class="form-grid">
       <label>Email для уведомлений
@@ -19,34 +19,21 @@
           required
         />
       </label>
-      <label>Email отправителя
+      <label>Email отправителя Resend
         <input
-          type="email"
-          name="sender_email"
-          value="{{ smtp_config.sender_email }}"
-          placeholder="propdd38@proton.me"
+          type="text"
+          name="resend_from_email"
+          value="{{ resend_config.from_email }}"
+          placeholder="PRO PDD <onboarding@resend.dev>"
           required
         />
       </label>
-      <label>Пароль SMTP
+      <label>API ключ Resend
         <input
           type="password"
-          name="site_email_password"
-          placeholder="Оставьте пустым, чтобы не менять сохраненный пароль"
+          name="resend_api_key"
+          placeholder="Оставьте пустым, чтобы не менять сохраненный ключ"
         />
-      </label>
-      <label>SMTP сервер
-        <input type="text" name="smtp_host" value="{{ smtp_config.host }}" required />
-      </label>
-      <label>SMTP порт
-        <input type="number" name="smtp_port" value="{{ smtp_config.port }}" min="1" max="65535" required />
-      </label>
-      <label>Защита SMTP
-        <select name="smtp_security" required>
-          <option value="starttls" {% if smtp_config.security == 'starttls' %}selected{% endif %}>STARTTLS</option>
-          <option value="ssl" {% if smtp_config.security == 'ssl' %}selected{% endif %}>SSL</option>
-          <option value="none" {% if smtp_config.security == 'none' %}selected{% endif %}>Без шифрования</option>
-        </select>
       </label>
       <div class="modal-actions">
         <button type="submit" name="action" value="save">Сохранить настройки</button>
@@ -71,20 +58,12 @@
             <td>{{ notification_email }}</td>
           </tr>
           <tr>
-            <td>Почта отправителя</td>
-            <td>{{ smtp_config.sender_email }}</td>
+            <td>Почта отправителя Resend</td>
+            <td>{{ resend_config.from_email }}</td>
           </tr>
           <tr>
-            <td>Пароль SMTP</td>
-            <td>{% if smtp_config.password %}Настроен{% else %}Не настроен{% endif %}</td>
-          </tr>
-          <tr>
-            <td>SMTP сервер</td>
-            <td>{{ smtp_config.host }}:{{ smtp_config.port }}</td>
-          </tr>
-          <tr>
-            <td>Защита SMTP</td>
-            <td>{{ smtp_config.security }}</td>
+            <td>API ключ Resend</td>
+            <td>{% if resend_config.api_key %}Настроен{% else %}Не настроен{% endif %}</td>
           </tr>
         </tbody>
       </table>

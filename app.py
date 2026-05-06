@@ -1,7 +1,10 @@
+import json
 import os
 import re
 import smtplib
 import sqlite3
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from datetime import datetime, timedelta
 from email.message import EmailMessage
 from functools import wraps
@@ -15,11 +18,10 @@ ADMIN_SECRET_CODE = os.getenv("ADMIN_SECRET_CODE", "SUPER-ADMIN-123")
 SLOT_HOURS = (10, 12, 14)
 PHONE_REGEX = re.compile(r"^\+7\d{10}$")
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
-DEFAULT_SITE_EMAIL = os.getenv("SITE_EMAIL_ADDRESS", "propdd38@proton.me")
-DEFAULT_SITE_EMAIL_PASSWORD = os.getenv("SITE_EMAIL_PASSWORD", "")
-DEFAULT_SMTP_HOST = os.getenv("SMTP_HOST", "smtp.protonmail.ch")
-DEFAULT_SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
-DEFAULT_SMTP_SECURITY = "ssl" if os.getenv("SMTP_USE_SSL", "0") == "1" else os.getenv("SMTP_SECURITY", "starttls")
+DEFAULT_NOTIFICATION_EMAIL = os.getenv("ADMIN_NOTIFICATION_EMAIL", "propdd38@proton.me")
+DEFAULT_RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "PRO PDD <onboarding@resend.dev>")
+DEFAULT_RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+RESEND_EMAILS_URL = os.getenv("RESEND_EMAILS_URL", "https://api.resend.com/emails")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
@@ -110,11 +112,9 @@ def init_db():
         (ADMIN_SECRET_CODE, datetime.utcnow().isoformat()),
     )
     default_settings = {
-        "admin_notification_email": DEFAULT_SITE_EMAIL,
-        "site_email_address": DEFAULT_SITE_EMAIL,
-        "smtp_host": DEFAULT_SMTP_HOST,
-        "smtp_port": str(DEFAULT_SMTP_PORT),
-        "smtp_security": DEFAULT_SMTP_SECURITY,
+        "admin_notification_email": DEFAULT_NOTIFICATION_EMAIL,
+        "resend_from_email": DEFAULT_RESEND_FROM_EMAIL,
+        "resend_api_key": DEFAULT_RESEND_API_KEY,
         "email_delivery_status": "Уведомления еще не отправлялись.",
     }
     for key, value in default_settings.items():
@@ -327,7 +327,7 @@ def admin_connection():
 
     if request.method == "POST":
         action = request.form.get("action", "save")
-        settings, error = parse_email_settings_form(request.form)
+        settings, error = parse_resend_settings_form(request.form)
 
         if error:
             flash(error, "error")
@@ -352,7 +352,7 @@ def admin_connection():
     return render_template(
         "admin_connection.html",
         notification_email=get_admin_notification_email(db),
-        smtp_config=get_smtp_config(db),
+        resend_config=get_resend_config(db),
         delivery_status=get_email_delivery_status(db),
     )
 
@@ -861,7 +861,7 @@ def upsert_setting(db, key, value):
 
 
 def get_admin_notification_email(db):
-    return get_setting(db, "admin_notification_email", DEFAULT_SITE_EMAIL)
+    return get_setting(db, "admin_notification_email", DEFAULT_NOTIFICATION_EMAIL) or DEFAULT_NOTIFICATION_EMAIL
 
 
 def get_email_delivery_status(db):
@@ -873,65 +873,40 @@ def set_email_delivery_status(db, message):
     db.commit()
 
 
-def get_smtp_config(db):
-    port_value = get_setting(db, "smtp_port", str(DEFAULT_SMTP_PORT))
-    try:
-        port = int(port_value)
-    except (TypeError, ValueError):
-        port = DEFAULT_SMTP_PORT
-
+def get_resend_config(db):
     return {
-        "sender_email": get_setting(db, "site_email_address", DEFAULT_SITE_EMAIL),
-        "password": get_setting(db, "site_email_password", DEFAULT_SITE_EMAIL_PASSWORD),
-        "host": get_setting(db, "smtp_host", DEFAULT_SMTP_HOST),
-        "port": port,
-        "security": get_setting(db, "smtp_security", DEFAULT_SMTP_SECURITY).lower(),
+        "from_email": get_setting(db, "resend_from_email", DEFAULT_RESEND_FROM_EMAIL) or DEFAULT_RESEND_FROM_EMAIL,
+        "api_key": get_setting(db, "resend_api_key", "") or DEFAULT_RESEND_API_KEY,
     }
 
 
-def parse_email_settings_form(form):
+def parse_resend_settings_form(form):
     notification_email = form.get("notification_email", "").strip()
-    sender_email = form.get("sender_email", "").strip()
-    password = form.get("site_email_password", "")
-    smtp_host = form.get("smtp_host", "").strip()
-    smtp_port = form.get("smtp_port", "").strip()
-    smtp_security = form.get("smtp_security", "starttls").strip().lower()
+    from_email = form.get("resend_from_email", "").strip()
+    api_key = form.get("resend_api_key", "")
 
     if not is_valid_email(notification_email):
         return None, "Введите корректный email для уведомлений."
-    if not is_valid_email(sender_email):
-        return None, "Введите корректный email отправителя."
-    if not smtp_host:
-        return None, "Укажите SMTP сервер."
-    try:
-        port = int(smtp_port)
-    except ValueError:
-        return None, "SMTP порт должен быть числом."
-    if not 1 <= port <= 65535:
-        return None, "SMTP порт должен быть от 1 до 65535."
-    if smtp_security not in {"starttls", "ssl", "none"}:
-        return None, "Выберите корректный тип SMTP защиты."
+    if not from_email:
+        return None, "Укажите email отправителя Resend."
 
     settings = {
         "admin_notification_email": notification_email,
-        "site_email_address": sender_email,
-        "smtp_host": smtp_host,
-        "smtp_port": str(port),
-        "smtp_security": smtp_security,
+        "resend_from_email": from_email,
     }
-    if password:
-        settings["site_email_password"] = password
+    if api_key:
+        settings["resend_api_key"] = api_key
 
     return settings, None
 
 
 def send_test_notification(db):
-    message = EmailMessage()
-    message["Subject"] = "Проверка уведомлений сайта"
-    message.set_content(
-        "Это тестовое письмо с сайта записи. Если вы его получили, уведомления настроены правильно."
+    return send_resend_email(
+        db,
+        get_admin_notification_email(db),
+        "Проверка уведомлений сайта",
+        "Это тестовое письмо с сайта записи. Если вы его получили, уведомления через Resend настроены правильно.",
     )
-    return send_email_message(db, message, get_admin_notification_email(db))
 
 
 def send_booking_notification(db, booking):
@@ -944,51 +919,92 @@ def send_booking_notification(db, booking):
     date_text = slot_dt.strftime("%d.%m.%Y") if slot_dt else booking["slot_datetime"][:10]
     time_text = slot_dt.strftime("%H:%M") if slot_dt else booking["slot_datetime"][11:16]
 
-    message = EmailMessage()
-    message["Subject"] = "Новая запись на занятие"
-    message.set_content(
+    body = (
         "Новая запись на занятие:\n\n"
         f"Дата: {date_text}\n"
         f"Имя: {booking['first_name']}\n"
         f"Фамилия: {booking['last_name']}\n"
         f"Время: {time_text}\n"
     )
-    return send_email_message(db, message, recipient)
+    return send_resend_email(db, recipient, "Новая запись на занятие", body)
 
 
-def send_email_message(db, message, recipient):
-    config = get_smtp_config(db)
+def send_resend_email(db, recipient, subject, text):
+    config = get_resend_config(db)
 
     if not is_valid_email(recipient):
         set_email_delivery_status(db, "Не указан корректный email получателя уведомлений.")
         return False
-    if not is_valid_email(config["sender_email"]):
-        set_email_delivery_status(db, "Не указан корректный email отправителя.")
+    if not config["from_email"]:
+        set_email_delivery_status(db, "Не указан email отправителя Resend на странице «Связь».")
         return False
-    if not config["password"]:
-        set_email_delivery_status(db, "Не указан пароль SMTP на странице «Связь» или в SITE_EMAIL_PASSWORD.")
+    if not config["api_key"]:
+        set_email_delivery_status(db, "Не указан API ключ Resend на странице «Связь» или в RESEND_API_KEY.")
         return False
 
-    message["From"] = config["sender_email"]
-    message["To"] = recipient
+    payload = {
+        "from": config["from_email"],
+        "to": [recipient],
+        "subject": subject,
+        "text": text,
+    }
+    encoded_payload = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        RESEND_EMAILS_URL,
+        data=encoded_payload,
+        headers={
+            "Authorization": f"Bearer {config['api_key']}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
 
     try:
-        if config["security"] == "ssl":
-            with smtplib.SMTP_SSL(config["host"], config["port"], timeout=15) as server:
-                server.login(config["sender_email"], config["password"])
-                server.send_message(message)
-        else:
-            with smtplib.SMTP(config["host"], config["port"], timeout=15) as server:
-                if config["security"] == "starttls":
-                    server.starttls()
-                server.login(config["sender_email"], config["password"])
-                server.send_message(message)
-    except (OSError, smtplib.SMTPException) as error:
-        set_email_delivery_status(db, f"Ошибка SMTP: {error}")
+        with urllib_request.urlopen(request, timeout=15) as response:
+            response_body = response.read().decode("utf-8")
+    except urllib_error.HTTPError as error:
+        error_body = error.read().decode("utf-8", errors="replace")
+        set_email_delivery_status(db, f"Ошибка Resend API {error.code}: {format_resend_error(error_body)}")
+        return False
+    except (OSError, urllib_error.URLError) as error:
+        set_email_delivery_status(db, f"Ошибка соединения с Resend: {error}")
         return False
 
-    set_email_delivery_status(db, f"Письмо успешно отправлено на {recipient}.")
+    email_id = parse_resend_email_id(response_body)
+    if email_id:
+        set_email_delivery_status(db, f"Письмо успешно отправлено через Resend на {recipient}. ID: {email_id}")
+    else:
+        set_email_delivery_status(db, f"Письмо отправлено через Resend на {recipient}.")
     return True
+
+
+def parse_resend_email_id(response_body):
+    try:
+        data = json.loads(response_body)
+    except json.JSONDecodeError:
+        return ""
+    return data.get("id", "") if isinstance(data, dict) else ""
+
+
+def format_resend_error(error_body):
+    if not error_body:
+        return "пустой ответ от Resend"
+
+    try:
+        data = json.loads(error_body)
+    except json.JSONDecodeError:
+        return error_body
+
+    if not isinstance(data, dict):
+        return error_body
+
+    message = data.get("message") or data.get("error")
+    name = data.get("name")
+    if name and message:
+        return f"{name}: {message}"
+    if message:
+        return str(message)
+    return error_body
 
 
 def build_calendar_days(db, today_iso):
