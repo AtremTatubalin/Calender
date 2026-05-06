@@ -1,0 +1,42 @@
+{% extends 'base.html' %}
+{% block title %}Связь{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card">
+    <h2>Связь</h2>
+    <p>Укажите email, на который будут приходить уведомления о новых записях.</p>
+    <form method="post" action="{{ url_for('admin_connection') }}" class="form-grid">
+      <label>Email для уведомлений
+        <input
+          type="email"
+          name="notification_email"
+          value="{{ notification_email }}"
+          placeholder="example@mail.com"
+          required
+        />
+      </label>
+      <button type="submit">Сохранить email</button>
+    </form>
+  </article>
+
+  <article class="card">
+    <h2>Текущий email</h2>
+    <div class="table-wrap">
+      <table class="users-table">
+        <thead>
+          <tr>
+            <th>Графа</th>
+            <th>Внесенный email</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Почта для уведомлений</td>
+            <td>{{ notification_email }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
+</section>
+{% endblock %}
