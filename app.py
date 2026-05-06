@@ -1,6 +1,9 @@
+import json
 import os
 import re
 import sqlite3
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 from datetime import datetime, timedelta
 from functools import wraps
 
@@ -12,6 +15,12 @@ DATABASE = os.path.join(BASE_DIR, "app.db")
 ADMIN_SECRET_CODE = os.getenv("ADMIN_SECRET_CODE", "SUPER-ADMIN-123")
 SLOT_HOURS = (10, 12, 14)
 PHONE_REGEX = re.compile(r"^\+7\d{10}$")
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+DEFAULT_NOTIFICATION_EMAIL = os.getenv("ADMIN_NOTIFICATION_EMAIL", "propdd38@proton.me")
+DEFAULT_RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "PRO PDD <onboarding@resend.dev>")
+DEFAULT_RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
+RESEND_EMAILS_URL = os.getenv("RESEND_EMAILS_URL", "https://api.resend.com/emails")
+RESEND_USER_AGENT = os.getenv("RESEND_USER_AGENT", "Calender/1.0 (+https://api.resend.com)")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
@@ -101,6 +110,20 @@ def init_db():
         """,
         (ADMIN_SECRET_CODE, datetime.utcnow().isoformat()),
     )
+    default_settings = {
+        "admin_notification_email": DEFAULT_NOTIFICATION_EMAIL,
+        "resend_from_email": DEFAULT_RESEND_FROM_EMAIL,
+        "resend_api_key": DEFAULT_RESEND_API_KEY,
+        "email_delivery_status": "Уведомления еще не отправлялись.",
+    }
+    for key, value in default_settings.items():
+        db.execute(
+            """
+            INSERT OR IGNORE INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (key, value, datetime.utcnow().isoformat()),
+        )
     db.commit()
 
     refresh_slots(db)
@@ -160,6 +183,10 @@ def login_required(view):
 
 def is_valid_phone(phone: str) -> bool:
     return bool(PHONE_REGEX.fullmatch(phone))
+
+
+def is_valid_email(email: str) -> bool:
+    return bool(EMAIL_REGEX.fullmatch(email))
 
 
 def admin_required(view):
@@ -292,6 +319,43 @@ def account():
     return render_template("account.html")
 
 
+@app.route("/admin/connection", methods=["GET", "POST"])
+@admin_required
+def admin_connection():
+    db = get_db()
+
+    if request.method == "POST":
+        action = request.form.get("action", "save")
+        settings, error = parse_resend_settings_form(request.form)
+
+        if error:
+            flash(error, "error")
+            return redirect(url_for("admin_connection"))
+
+        for key, value in settings.items():
+            upsert_setting(db, key, value)
+
+        db.commit()
+
+        if action == "test":
+            sent = send_test_notification(db)
+            if sent:
+                flash("Настройки сохранены. Тестовое письмо отправлено.", "success")
+            else:
+                flash(get_email_delivery_status(db), "error")
+        else:
+            flash("Настройки связи сохранены.", "success")
+
+        return redirect(url_for("admin_connection"))
+
+    return render_template(
+        "admin_connection.html",
+        notification_email=get_admin_notification_email(db),
+        resend_config=get_resend_config(db),
+        delivery_status=get_email_delivery_status(db),
+    )
+
+
 @app.route("/account/update-profile", methods=["POST"])
 @login_required
 def update_profile():
@@ -411,7 +475,24 @@ def book_slot(slot_id):
             (session["user_id"], slot_id),
         )
         db.commit()
-        flash("Вы успешно записались.", "success")
+
+        booked_slot = db.execute(
+            """
+            SELECT s.slot_datetime, u.first_name, u.last_name
+            FROM slots s
+            JOIN users u ON s.booked_by = u.id
+            WHERE s.id = ?
+            """,
+            (slot_id,),
+        ).fetchone()
+        email_sent = send_booking_notification(db, booked_slot)
+        if email_sent:
+            flash("Вы успешно записались. Уведомление отправлено администратору.", "success")
+        else:
+            flash(
+                f"Вы успешно записались, но уведомление на email отправить не удалось: {get_email_delivery_status(db)}",
+                "error",
+            )
 
     return redirect(url_for("dashboard"))
 
@@ -420,7 +501,15 @@ def book_slot(slot_id):
 @login_required
 def cancel_slot(slot_id):
     db = get_db()
-    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+    slot = db.execute(
+        """
+        SELECT s.*, u.first_name, u.last_name
+        FROM slots s
+        LEFT JOIN users u ON s.booked_by = u.id
+        WHERE s.id = ?
+        """,
+        (slot_id,),
+    ).fetchone()
 
     if slot is None:
         flash("Слот не найден.", "error")
@@ -431,7 +520,15 @@ def cancel_slot(slot_id):
     else:
         db.execute("UPDATE slots SET status = 'free', booked_by = NULL WHERE id = ?", (slot_id,))
         db.commit()
-        flash("Запись отменена.", "success")
+
+        email_sent = send_cancellation_notification(db, slot)
+        if email_sent:
+            flash("Запись отменена. Уведомление отправлено администратору.", "success")
+        else:
+            flash(
+                f"Запись отменена, но уведомление на email отправить не удалось: {get_email_delivery_status(db)}",
+                "error",
+            )
 
     return redirect(url_for("dashboard"))
 
@@ -505,7 +602,15 @@ def skip_statistics(slot_id):
 @login_required
 def delete_slot(slot_id):
     db = get_db()
-    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+    slot = db.execute(
+        """
+        SELECT s.*, u.first_name, u.last_name
+        FROM slots s
+        LEFT JOIN users u ON s.booked_by = u.id
+        WHERE s.id = ?
+        """,
+        (slot_id,),
+    ).fetchone()
 
     if slot is None:
         flash("Слот не найден.", "error")
@@ -514,7 +619,20 @@ def delete_slot(slot_id):
     else:
         db.execute("UPDATE slots SET status = 'free', booked_by = NULL WHERE id = ?", (slot_id,))
         db.commit()
-        flash("Ваша запись удалена из списка — слот снова свободен.", "success")
+
+        email_sent = send_cancellation_notification(db, slot)
+        if email_sent:
+            flash(
+                "Ваша запись удалена из списка — слот снова свободен. "
+                "Уведомление отправлено администратору.",
+                "success",
+            )
+        else:
+            flash(
+                "Ваша запись удалена из списка — слот снова свободен, "
+                f"но уведомление на email отправить не удалось: {get_email_delivery_status(db)}",
+                "error",
+            )
 
     return redirect(url_for("dashboard"))
 
@@ -756,6 +874,189 @@ def get_admin_secret_code(db):
     if row is None:
         return ADMIN_SECRET_CODE
     return row["value"]
+
+
+def get_setting(db, key, default=""):
+    row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return default
+    return row["value"]
+
+
+def upsert_setting(db, key, value):
+    db.execute(
+        """
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+        """,
+        (key, value, datetime.utcnow().isoformat()),
+    )
+
+
+def get_admin_notification_email(db):
+    return get_setting(db, "admin_notification_email", DEFAULT_NOTIFICATION_EMAIL) or DEFAULT_NOTIFICATION_EMAIL
+
+
+def get_email_delivery_status(db):
+    return get_setting(db, "email_delivery_status", "Уведомления еще не отправлялись.")
+
+
+def set_email_delivery_status(db, message):
+    upsert_setting(db, "email_delivery_status", message)
+    db.commit()
+
+
+def get_resend_config(db):
+    return {
+        "from_email": get_setting(db, "resend_from_email", DEFAULT_RESEND_FROM_EMAIL) or DEFAULT_RESEND_FROM_EMAIL,
+        "api_key": get_setting(db, "resend_api_key", "") or DEFAULT_RESEND_API_KEY,
+    }
+
+
+def parse_resend_settings_form(form):
+    notification_email = form.get("notification_email", "").strip()
+    from_email = form.get("resend_from_email", "").strip()
+    api_key = form.get("resend_api_key", "")
+
+    if not is_valid_email(notification_email):
+        return None, "Введите корректный email для уведомлений."
+    if not from_email:
+        return None, "Укажите email отправителя Resend."
+
+    settings = {
+        "admin_notification_email": notification_email,
+        "resend_from_email": from_email,
+    }
+    if api_key:
+        settings["resend_api_key"] = api_key
+
+    return settings, None
+
+
+def send_test_notification(db):
+    return send_resend_email(
+        db,
+        get_admin_notification_email(db),
+        "Проверка уведомлений сайта",
+        "Это тестовое письмо с сайта записи. Если вы его получили, уведомления через Resend настроены правильно.",
+    )
+
+
+def send_booking_notification(db, booking):
+    return send_lesson_notification(
+        db, booking, "Новая запись на занятие", "Новая запись на занятие"
+    )
+
+
+def send_cancellation_notification(db, booking):
+    return send_lesson_notification(
+        db, booking, "Отмена записи на занятие", "Отмена записи на занятие"
+    )
+
+
+def send_lesson_notification(db, booking, subject, heading):
+    recipient = get_admin_notification_email(db)
+    if booking is None or not is_valid_email(recipient):
+        set_email_delivery_status(db, "Не указан корректный email получателя уведомлений.")
+        return False
+
+    slot_dt = parse_iso_datetime(booking["slot_datetime"])
+    date_text = slot_dt.strftime("%d.%m.%Y") if slot_dt else booking["slot_datetime"][:10]
+    time_text = slot_dt.strftime("%H:%M") if slot_dt else booking["slot_datetime"][11:16]
+
+    body = (
+        f"{heading}:\n\n"
+        f"Дата: {date_text}\n"
+        f"Имя: {booking['first_name']}\n"
+        f"Фамилия: {booking['last_name']}\n"
+        f"Время: {time_text}\n"
+    )
+    return send_resend_email(db, recipient, subject, body)
+
+
+def send_resend_email(db, recipient, subject, text):
+    config = get_resend_config(db)
+
+    if not is_valid_email(recipient):
+        set_email_delivery_status(db, "Не указан корректный email получателя уведомлений.")
+        return False
+    if not config["from_email"]:
+        set_email_delivery_status(db, "Не указан email отправителя Resend на странице «Связь».")
+        return False
+    if not config["api_key"]:
+        set_email_delivery_status(db, "Не указан API ключ Resend на странице «Связь» или в RESEND_API_KEY.")
+        return False
+
+    payload = {
+        "from": config["from_email"],
+        "to": [recipient],
+        "subject": subject,
+        "text": text,
+    }
+    encoded_payload = json.dumps(payload).encode("utf-8")
+    request = urllib_request.Request(
+        RESEND_EMAILS_URL,
+        data=encoded_payload,
+        headers={
+            "Authorization": f"Bearer {config['api_key']}",
+            "Content-Type": "application/json",
+            "User-Agent": RESEND_USER_AGENT,
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib_request.urlopen(request, timeout=15) as response:
+            response_body = response.read().decode("utf-8")
+    except urllib_error.HTTPError as error:
+        error_body = error.read().decode("utf-8", errors="replace")
+        set_email_delivery_status(db, f"Ошибка Resend API {error.code}: {format_resend_error(error_body)}")
+        return False
+    except (OSError, urllib_error.URLError) as error:
+        set_email_delivery_status(db, f"Ошибка соединения с Resend: {error}")
+        return False
+
+    email_id = parse_resend_email_id(response_body)
+    if email_id:
+        set_email_delivery_status(db, f"Письмо успешно отправлено через Resend на {recipient}. ID: {email_id}")
+    else:
+        set_email_delivery_status(db, f"Письмо отправлено через Resend на {recipient}.")
+    return True
+
+
+def parse_resend_email_id(response_body):
+    try:
+        data = json.loads(response_body)
+    except json.JSONDecodeError:
+        return ""
+    return data.get("id", "") if isinstance(data, dict) else ""
+
+
+def format_resend_error(error_body):
+    if not error_body:
+        return "пустой ответ от Resend"
+
+    if "error code: 1010" in error_body.lower() or "code 1010" in error_body.lower():
+        return "Cloudflare 1010: Resend отклонил запрос. Проверьте, что сайт отправляет заголовок User-Agent."
+
+    try:
+        data = json.loads(error_body)
+    except json.JSONDecodeError:
+        return error_body
+
+    if not isinstance(data, dict):
+        return error_body
+
+    message = data.get("message") or data.get("error")
+    name = data.get("name")
+    if name and message:
+        return f"{name}: {message}"
+    if message:
+        return str(message)
+    return error_body
 
 
 def build_calendar_days(db, today_iso):
