@@ -503,7 +503,15 @@ def book_slot(slot_id):
 @login_required
 def cancel_slot(slot_id):
     db = get_db()
-    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+    slot = db.execute(
+        """
+        SELECT s.*, u.first_name, u.last_name
+        FROM slots s
+        LEFT JOIN users u ON s.booked_by = u.id
+        WHERE s.id = ?
+        """,
+        (slot_id,),
+    ).fetchone()
 
     if slot is None:
         flash("Слот не найден.", "error")
@@ -514,7 +522,15 @@ def cancel_slot(slot_id):
     else:
         db.execute("UPDATE slots SET status = 'free', booked_by = NULL WHERE id = ?", (slot_id,))
         db.commit()
-        flash("Запись отменена.", "success")
+
+        email_sent = send_cancellation_notification(db, slot)
+        if email_sent:
+            flash("Запись отменена. Уведомление отправлено администратору.", "success")
+        else:
+            flash(
+                f"Запись отменена, но уведомление на email отправить не удалось: {get_email_delivery_status(db)}",
+                "error",
+            )
 
     return redirect(url_for("dashboard"))
 
@@ -588,7 +604,15 @@ def skip_statistics(slot_id):
 @login_required
 def delete_slot(slot_id):
     db = get_db()
-    slot = db.execute("SELECT * FROM slots WHERE id = ?", (slot_id,)).fetchone()
+    slot = db.execute(
+        """
+        SELECT s.*, u.first_name, u.last_name
+        FROM slots s
+        LEFT JOIN users u ON s.booked_by = u.id
+        WHERE s.id = ?
+        """,
+        (slot_id,),
+    ).fetchone()
 
     if slot is None:
         flash("Слот не найден.", "error")
@@ -597,7 +621,20 @@ def delete_slot(slot_id):
     else:
         db.execute("UPDATE slots SET status = 'free', booked_by = NULL WHERE id = ?", (slot_id,))
         db.commit()
-        flash("Ваша запись удалена из списка — слот снова свободен.", "success")
+
+        email_sent = send_cancellation_notification(db, slot)
+        if email_sent:
+            flash(
+                "Ваша запись удалена из списка — слот снова свободен. "
+                "Уведомление отправлено администратору.",
+                "success",
+            )
+        else:
+            flash(
+                "Ваша запись удалена из списка — слот снова свободен, "
+                f"но уведомление на email отправить не удалось: {get_email_delivery_status(db)}",
+                "error",
+            )
 
     return redirect(url_for("dashboard"))
 
@@ -911,6 +948,18 @@ def send_test_notification(db):
 
 
 def send_booking_notification(db, booking):
+    return send_lesson_notification(
+        db, booking, "Новая запись на занятие", "Новая запись на занятие"
+    )
+
+
+def send_cancellation_notification(db, booking):
+    return send_lesson_notification(
+        db, booking, "Отмена записи на занятие", "Отмена записи на занятие"
+    )
+
+
+def send_lesson_notification(db, booking, subject, heading):
     recipient = get_admin_notification_email(db)
     if booking is None or not is_valid_email(recipient):
         set_email_delivery_status(db, "Не указан корректный email получателя уведомлений.")
@@ -921,13 +970,13 @@ def send_booking_notification(db, booking):
     time_text = slot_dt.strftime("%H:%M") if slot_dt else booking["slot_datetime"][11:16]
 
     body = (
-        "Новая запись на занятие:\n\n"
+        f"{heading}:\n\n"
         f"Дата: {date_text}\n"
         f"Имя: {booking['first_name']}\n"
         f"Фамилия: {booking['last_name']}\n"
         f"Время: {time_text}\n"
     )
-    return send_resend_email(db, recipient, "Новая запись на занятие", body)
+    return send_resend_email(db, recipient, subject, body)
 
 
 def send_resend_email(db, recipient, subject, text):
