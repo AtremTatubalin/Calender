@@ -16,7 +16,7 @@ SLOT_HOURS = (10, 12, 14)
 PHONE_REGEX = re.compile(r"^\+7\d{10}$")
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 DEFAULT_SITE_EMAIL = os.getenv("SITE_EMAIL_ADDRESS", "propdd38@proton.me")
-DEFAULT_SITE_EMAIL_PASSWORD = os.getenv("SITE_EMAIL_PASSWORD", "")
+DEFAULT_SITE_EMAIL_PASSWORD = os.getenv("SITE_EMAIL_PASSWORD", "Artem.071831668")
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.protonmail.ch")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
 SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "0") == "1"
