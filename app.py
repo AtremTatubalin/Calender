@@ -1,7 +1,9 @@
 import os
 import re
+import smtplib
 import sqlite3
 from datetime import datetime, timedelta
+from email.message import EmailMessage
 from functools import wraps
 
 from flask import Flask, flash, g, redirect, render_template, request, session, url_for
@@ -12,6 +14,12 @@ DATABASE = os.path.join(BASE_DIR, "app.db")
 ADMIN_SECRET_CODE = os.getenv("ADMIN_SECRET_CODE", "SUPER-ADMIN-123")
 SLOT_HOURS = (10, 12, 14)
 PHONE_REGEX = re.compile(r"^\+7\d{10}$")
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+DEFAULT_SITE_EMAIL = os.getenv("SITE_EMAIL_ADDRESS", "propdd38@proton.me")
+DEFAULT_SITE_EMAIL_PASSWORD = os.getenv("SITE_EMAIL_PASSWORD", "")
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.protonmail.ch")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USE_SSL = os.getenv("SMTP_USE_SSL", "0") == "1"
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
@@ -101,6 +109,13 @@ def init_db():
         """,
         (ADMIN_SECRET_CODE, datetime.utcnow().isoformat()),
     )
+    db.execute(
+        """
+        INSERT OR IGNORE INTO settings (key, value, updated_at)
+        VALUES ('admin_notification_email', ?, ?)
+        """,
+        (DEFAULT_SITE_EMAIL, datetime.utcnow().isoformat()),
+    )
     db.commit()
 
     refresh_slots(db)
@@ -160,6 +175,10 @@ def login_required(view):
 
 def is_valid_phone(phone: str) -> bool:
     return bool(PHONE_REGEX.fullmatch(phone))
+
+
+def is_valid_email(email: str) -> bool:
+    return bool(EMAIL_REGEX.fullmatch(email))
 
 
 def admin_required(view):
@@ -292,6 +311,36 @@ def account():
     return render_template("account.html")
 
 
+@app.route("/admin/connection", methods=["GET", "POST"])
+@admin_required
+def admin_connection():
+    db = get_db()
+
+    if request.method == "POST":
+        notification_email = request.form.get("notification_email", "").strip()
+
+        if not is_valid_email(notification_email):
+            flash("Введите корректный email для уведомлений.", "error")
+            return redirect(url_for("admin_connection"))
+
+        db.execute(
+            """
+            INSERT INTO settings (key, value, updated_at)
+            VALUES ('admin_notification_email', ?, ?)
+            ON CONFLICT(key) DO UPDATE SET
+              value = excluded.value,
+              updated_at = excluded.updated_at
+            """,
+            (notification_email, datetime.utcnow().isoformat()),
+        )
+        db.commit()
+        flash("Email для уведомлений сохранен.", "success")
+        return redirect(url_for("admin_connection"))
+
+    notification_email = get_admin_notification_email(db)
+    return render_template("admin_connection.html", notification_email=notification_email)
+
+
 @app.route("/account/update-profile", methods=["POST"])
 @login_required
 def update_profile():
@@ -411,7 +460,24 @@ def book_slot(slot_id):
             (session["user_id"], slot_id),
         )
         db.commit()
-        flash("Вы успешно записались.", "success")
+
+        booked_slot = db.execute(
+            """
+            SELECT s.slot_datetime, u.first_name, u.last_name
+            FROM slots s
+            JOIN users u ON s.booked_by = u.id
+            WHERE s.id = ?
+            """,
+            (slot_id,),
+        ).fetchone()
+        email_sent = send_booking_notification(db, booked_slot)
+        if email_sent:
+            flash("Вы успешно записались. Уведомление отправлено администратору.", "success")
+        else:
+            flash(
+                "Вы успешно записались, но уведомление на email отправить не удалось.",
+                "error",
+            )
 
     return redirect(url_for("dashboard"))
 
@@ -756,6 +822,52 @@ def get_admin_secret_code(db):
     if row is None:
         return ADMIN_SECRET_CODE
     return row["value"]
+
+
+def get_admin_notification_email(db):
+    row = db.execute(
+        "SELECT value FROM settings WHERE key = 'admin_notification_email'"
+    ).fetchone()
+    if row is None:
+        return DEFAULT_SITE_EMAIL
+    return row["value"]
+
+
+def send_booking_notification(db, booking):
+    recipient = get_admin_notification_email(db)
+    if booking is None or not is_valid_email(recipient) or not DEFAULT_SITE_EMAIL_PASSWORD:
+        return False
+
+    slot_dt = parse_iso_datetime(booking["slot_datetime"])
+    date_text = slot_dt.strftime("%d.%m.%Y") if slot_dt else booking["slot_datetime"][:10]
+    time_text = slot_dt.strftime("%H:%M") if slot_dt else booking["slot_datetime"][11:16]
+
+    message = EmailMessage()
+    message["Subject"] = "Новая запись на занятие"
+    message["From"] = DEFAULT_SITE_EMAIL
+    message["To"] = recipient
+    message.set_content(
+        "Новая запись на занятие:\n\n"
+        f"Дата: {date_text}\n"
+        f"Имя: {booking['first_name']}\n"
+        f"Фамилия: {booking['last_name']}\n"
+        f"Время: {time_text}\n"
+    )
+
+    try:
+        if SMTP_USE_SSL:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+                server.login(DEFAULT_SITE_EMAIL, DEFAULT_SITE_EMAIL_PASSWORD)
+                server.send_message(message)
+        else:
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=15) as server:
+                server.starttls()
+                server.login(DEFAULT_SITE_EMAIL, DEFAULT_SITE_EMAIL_PASSWORD)
+                server.send_message(message)
+    except (OSError, smtplib.SMTPException):
+        return False
+
+    return True
 
 
 def build_calendar_days(db, today_iso):
