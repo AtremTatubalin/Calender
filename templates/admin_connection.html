@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% block title %}Связь{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card wide-card">
+    <h2>Связь</h2>
+    <p>Укажите почту получателя и данные Resend, через которые сайт будет отправлять уведомления.</p>
+    <p>
+      В Resend нужен API ключ. Поле отправителя должно быть адресом с подтвержденного домена Resend
+      или тестовым адресом <code>onboarding@resend.dev</code> для проверки.
+    </p>
+    <form method="post" action="{{ url_for('admin_connection') }}" class="form-grid">
+      <label>Email для уведомлений
+        <input
+          type="email"
+          name="notification_email"
+          value="{{ notification_email }}"
+          placeholder="example@mail.com"
+          required
+        />
+      </label>
+      <label>Email отправителя Resend
+        <input
+          type="text"
+          name="resend_from_email"
+          value="{{ resend_config.from_email }}"
+          placeholder="PRO PDD <onboarding@resend.dev>"
+          required
+        />
+      </label>
+      <label>API ключ Resend
+        <input
+          type="password"
+          name="resend_api_key"
+          placeholder="Оставьте пустым, чтобы не менять сохраненный ключ"
+        />
+      </label>
+      <div class="modal-actions">
+        <button type="submit" name="action" value="save">Сохранить настройки</button>
+        <button type="submit" name="action" value="test" class="secondary">Сохранить и отправить тест</button>
+      </div>
+    </form>
+  </article>
+
+  <article class="card">
+    <h2>Текущие настройки</h2>
+    <div class="table-wrap">
+      <table class="users-table">
+        <thead>
+          <tr>
+            <th>Графа</th>
+            <th>Внесенное значение</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Почта для уведомлений</td>
+            <td>{{ notification_email }}</td>
+          </tr>
+          <tr>
+            <td>Почта отправителя Resend</td>
+            <td>{{ resend_config.from_email }}</td>
+          </tr>
+          <tr>
+            <td>API ключ Resend</td>
+            <td>{% if resend_config.api_key %}Настроен{% else %}Не настроен{% endif %}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="card">
+    <h2>Статус отправки</h2>
+    <p>{{ delivery_status }}</p>
+  </article>
+</section>
+{% endblock %}
