@@ -18,7 +18,13 @@
   - блокировка/разблокировка слотов;
   - блокировка дня целиком;
   - просмотр и удаление зарегистрированных пользователей на отдельной странице-таблице;
-  - смена секретного кода для регистрации админов через модальное окно.
+  - смена секретного кода для регистрации админов через модальное окно;
+<<<<<<< codex/add-contact-page-to-admin-account-ikx4ay
+  - настройка email получателя, отправителя и Resend API на странице «Связь»;
+=======
+  - настройка email получателя, отправителя и SMTP на странице «Связь»;
+>>>>>>> main
+  - отправка уведомления администратору при новой записи.
 
 ## Запуск
 
@@ -28,6 +34,15 @@ source .venv/bin/activate
 pip install -r requirements.txt
 export FLASK_SECRET_KEY='replace-me'
 export ADMIN_SECRET_CODE='my-secret-admin-code'
+<<<<<<< codex/add-contact-page-to-admin-account-ikx4ay
+export ADMIN_NOTIFICATION_EMAIL='propdd38@proton.me'
+export RESEND_FROM_EMAIL='PRO PDD <onboarding@resend.dev>'
+export RESEND_API_KEY='re_your_api_key'
+=======
+export SITE_EMAIL_ADDRESS='propdd38@proton.me'
+export SITE_EMAIL_PASSWORD='smtp-password-or-token'
+# При необходимости настройте SMTP_HOST, SMTP_PORT и SMTP_SECURITY=starttls|ssl|none.
+>>>>>>> main
 python app.py
 ```
 
@@ -38,4 +53,11 @@ python app.py
 - База данных: `SQLite` (`app.db`), создаётся автоматически при первом запуске.
 - Слоты автоматически поддерживаются актуальными: с текущей даты и на 14 дней вперёд (время `10:00`, `12:00`, `14:00`), прошедшие удаляются.
 - Запись на занятия в текущий день отключена.
+<<<<<<< codex/add-contact-page-to-admin-account-ikx4ay
+- Ключ Resend не хранится в коде: задайте его через переменную окружения `RESEND_API_KEY` или внесите на странице «Связь».
+- Для боевой отправки через Resend подтвердите домен и укажите отправителя с этого домена. Для теста можно использовать `onboarding@resend.dev`.
+=======
+- Email-пароль не хранится в коде: задайте его через переменную окружения `SITE_EMAIL_PASSWORD` или внесите SMTP-пароль на странице «Связь».
+- Для Proton Mail обычно нужен пароль Proton Mail Bridge или SMTP-токен; обычный пароль от почтового ящика может не работать для SMTP.
+>>>>>>> main
 - Endpoint `POST /delete/<slot_id>` удаляет запись пользователя из его списка и освобождает слот (слот не удаляется из расписания).
