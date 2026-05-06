@@ -22,6 +22,7 @@ DEFAULT_NOTIFICATION_EMAIL = os.getenv("ADMIN_NOTIFICATION_EMAIL", "propdd38@pro
 DEFAULT_RESEND_FROM_EMAIL = os.getenv("RESEND_FROM_EMAIL", "PRO PDD <onboarding@resend.dev>")
 DEFAULT_RESEND_API_KEY = os.getenv("RESEND_API_KEY", "")
 RESEND_EMAILS_URL = os.getenv("RESEND_EMAILS_URL", "https://api.resend.com/emails")
+RESEND_USER_AGENT = os.getenv("RESEND_USER_AGENT", "Calender/1.0 (+https://api.resend.com)")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
@@ -955,6 +956,7 @@ def send_resend_email(db, recipient, subject, text):
         headers={
             "Authorization": f"Bearer {config['api_key']}",
             "Content-Type": "application/json",
+            "User-Agent": RESEND_USER_AGENT,
         },
         method="POST",
     )
@@ -989,6 +991,9 @@ def parse_resend_email_id(response_body):
 def format_resend_error(error_body):
     if not error_body:
         return "пустой ответ от Resend"
+
+    if "error code: 1010" in error_body.lower() or "code 1010" in error_body.lower():
+        return "Cloudflare 1010: Resend отклонил запрос. Проверьте, что сайт отправляет заголовок User-Agent."
 
     try:
         data = json.loads(error_body)
