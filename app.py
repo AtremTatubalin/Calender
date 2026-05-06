@@ -1,7 +1,9 @@
 import os
 import re
+import smtplib
 import sqlite3
 from datetime import datetime, timedelta
+from email.message import EmailMessage
 from functools import wraps
 
 from flask import Flask, flash, g, redirect, render_template, request, session, url_for
@@ -12,6 +14,12 @@ DATABASE = os.path.join(BASE_DIR, "app.db")
 ADMIN_SECRET_CODE = os.getenv("ADMIN_SECRET_CODE", "SUPER-ADMIN-123")
 SLOT_HOURS = (10, 12, 14)
 PHONE_REGEX = re.compile(r"^\+7\d{10}$")
+EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+DEFAULT_SITE_EMAIL = os.getenv("SITE_EMAIL_ADDRESS", "propdd38@proton.me")
+DEFAULT_SITE_EMAIL_PASSWORD = os.getenv("SITE_EMAIL_PASSWORD", "")
+DEFAULT_SMTP_HOST = os.getenv("SMTP_HOST", "smtp.protonmail.ch")
+DEFAULT_SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+DEFAULT_SMTP_SECURITY = "ssl" if os.getenv("SMTP_USE_SSL", "0") == "1" else os.getenv("SMTP_SECURITY", "starttls")
 
 app = Flask(__name__)
 app.config["SECRET_KEY"] = os.getenv("FLASK_SECRET_KEY", "dev-secret-key-change-me")
@@ -101,6 +109,22 @@ def init_db():
         """,
         (ADMIN_SECRET_CODE, datetime.utcnow().isoformat()),
     )
+    default_settings = {
+        "admin_notification_email": DEFAULT_SITE_EMAIL,
+        "site_email_address": DEFAULT_SITE_EMAIL,
+        "smtp_host": DEFAULT_SMTP_HOST,
+        "smtp_port": str(DEFAULT_SMTP_PORT),
+        "smtp_security": DEFAULT_SMTP_SECURITY,
+        "email_delivery_status": "Уведомления еще не отправлялись.",
+    }
+    for key, value in default_settings.items():
+        db.execute(
+            """
+            INSERT OR IGNORE INTO settings (key, value, updated_at)
+            VALUES (?, ?, ?)
+            """,
+            (key, value, datetime.utcnow().isoformat()),
+        )
     db.commit()
 
     refresh_slots(db)
@@ -160,6 +184,10 @@ def login_required(view):
 
 def is_valid_phone(phone: str) -> bool:
     return bool(PHONE_REGEX.fullmatch(phone))
+
+
+def is_valid_email(email: str) -> bool:
+    return bool(EMAIL_REGEX.fullmatch(email))
 
 
 def admin_required(view):
@@ -292,6 +320,43 @@ def account():
     return render_template("account.html")
 
 
+@app.route("/admin/connection", methods=["GET", "POST"])
+@admin_required
+def admin_connection():
+    db = get_db()
+
+    if request.method == "POST":
+        action = request.form.get("action", "save")
+        settings, error = parse_email_settings_form(request.form)
+
+        if error:
+            flash(error, "error")
+            return redirect(url_for("admin_connection"))
+
+        for key, value in settings.items():
+            upsert_setting(db, key, value)
+
+        db.commit()
+
+        if action == "test":
+            sent = send_test_notification(db)
+            if sent:
+                flash("Настройки сохранены. Тестовое письмо отправлено.", "success")
+            else:
+                flash(get_email_delivery_status(db), "error")
+        else:
+            flash("Настройки связи сохранены.", "success")
+
+        return redirect(url_for("admin_connection"))
+
+    return render_template(
+        "admin_connection.html",
+        notification_email=get_admin_notification_email(db),
+        smtp_config=get_smtp_config(db),
+        delivery_status=get_email_delivery_status(db),
+    )
+
+
 @app.route("/account/update-profile", methods=["POST"])
 @login_required
 def update_profile():
@@ -411,7 +476,24 @@ def book_slot(slot_id):
             (session["user_id"], slot_id),
         )
         db.commit()
-        flash("Вы успешно записались.", "success")
+
+        booked_slot = db.execute(
+            """
+            SELECT s.slot_datetime, u.first_name, u.last_name
+            FROM slots s
+            JOIN users u ON s.booked_by = u.id
+            WHERE s.id = ?
+            """,
+            (slot_id,),
+        ).fetchone()
+        email_sent = send_booking_notification(db, booked_slot)
+        if email_sent:
+            flash("Вы успешно записались. Уведомление отправлено администратору.", "success")
+        else:
+            flash(
+                f"Вы успешно записались, но уведомление на email отправить не удалось: {get_email_delivery_status(db)}",
+                "error",
+            )
 
     return redirect(url_for("dashboard"))
 
@@ -756,6 +838,157 @@ def get_admin_secret_code(db):
     if row is None:
         return ADMIN_SECRET_CODE
     return row["value"]
+
+
+def get_setting(db, key, default=""):
+    row = db.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+    if row is None:
+        return default
+    return row["value"]
+
+
+def upsert_setting(db, key, value):
+    db.execute(
+        """
+        INSERT INTO settings (key, value, updated_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+          value = excluded.value,
+          updated_at = excluded.updated_at
+        """,
+        (key, value, datetime.utcnow().isoformat()),
+    )
+
+
+def get_admin_notification_email(db):
+    return get_setting(db, "admin_notification_email", DEFAULT_SITE_EMAIL)
+
+
+def get_email_delivery_status(db):
+    return get_setting(db, "email_delivery_status", "Уведомления еще не отправлялись.")
+
+
+def set_email_delivery_status(db, message):
+    upsert_setting(db, "email_delivery_status", message)
+    db.commit()
+
+
+def get_smtp_config(db):
+    port_value = get_setting(db, "smtp_port", str(DEFAULT_SMTP_PORT))
+    try:
+        port = int(port_value)
+    except (TypeError, ValueError):
+        port = DEFAULT_SMTP_PORT
+
+    return {
+        "sender_email": get_setting(db, "site_email_address", DEFAULT_SITE_EMAIL),
+        "password": get_setting(db, "site_email_password", DEFAULT_SITE_EMAIL_PASSWORD),
+        "host": get_setting(db, "smtp_host", DEFAULT_SMTP_HOST),
+        "port": port,
+        "security": get_setting(db, "smtp_security", DEFAULT_SMTP_SECURITY).lower(),
+    }
+
+
+def parse_email_settings_form(form):
+    notification_email = form.get("notification_email", "").strip()
+    sender_email = form.get("sender_email", "").strip()
+    password = form.get("site_email_password", "")
+    smtp_host = form.get("smtp_host", "").strip()
+    smtp_port = form.get("smtp_port", "").strip()
+    smtp_security = form.get("smtp_security", "starttls").strip().lower()
+
+    if not is_valid_email(notification_email):
+        return None, "Введите корректный email для уведомлений."
+    if not is_valid_email(sender_email):
+        return None, "Введите корректный email отправителя."
+    if not smtp_host:
+        return None, "Укажите SMTP сервер."
+    try:
+        port = int(smtp_port)
+    except ValueError:
+        return None, "SMTP порт должен быть числом."
+    if not 1 <= port <= 65535:
+        return None, "SMTP порт должен быть от 1 до 65535."
+    if smtp_security not in {"starttls", "ssl", "none"}:
+        return None, "Выберите корректный тип SMTP защиты."
+
+    settings = {
+        "admin_notification_email": notification_email,
+        "site_email_address": sender_email,
+        "smtp_host": smtp_host,
+        "smtp_port": str(port),
+        "smtp_security": smtp_security,
+    }
+    if password:
+        settings["site_email_password"] = password
+
+    return settings, None
+
+
+def send_test_notification(db):
+    message = EmailMessage()
+    message["Subject"] = "Проверка уведомлений сайта"
+    message.set_content(
+        "Это тестовое письмо с сайта записи. Если вы его получили, уведомления настроены правильно."
+    )
+    return send_email_message(db, message, get_admin_notification_email(db))
+
+
+def send_booking_notification(db, booking):
+    recipient = get_admin_notification_email(db)
+    if booking is None or not is_valid_email(recipient):
+        set_email_delivery_status(db, "Не указан корректный email получателя уведомлений.")
+        return False
+
+    slot_dt = parse_iso_datetime(booking["slot_datetime"])
+    date_text = slot_dt.strftime("%d.%m.%Y") if slot_dt else booking["slot_datetime"][:10]
+    time_text = slot_dt.strftime("%H:%M") if slot_dt else booking["slot_datetime"][11:16]
+
+    message = EmailMessage()
+    message["Subject"] = "Новая запись на занятие"
+    message.set_content(
+        "Новая запись на занятие:\n\n"
+        f"Дата: {date_text}\n"
+        f"Имя: {booking['first_name']}\n"
+        f"Фамилия: {booking['last_name']}\n"
+        f"Время: {time_text}\n"
+    )
+    return send_email_message(db, message, recipient)
+
+
+def send_email_message(db, message, recipient):
+    config = get_smtp_config(db)
+
+    if not is_valid_email(recipient):
+        set_email_delivery_status(db, "Не указан корректный email получателя уведомлений.")
+        return False
+    if not is_valid_email(config["sender_email"]):
+        set_email_delivery_status(db, "Не указан корректный email отправителя.")
+        return False
+    if not config["password"]:
+        set_email_delivery_status(db, "Не указан пароль SMTP на странице «Связь» или в SITE_EMAIL_PASSWORD.")
+        return False
+
+    message["From"] = config["sender_email"]
+    message["To"] = recipient
+
+    try:
+        if config["security"] == "ssl":
+            with smtplib.SMTP_SSL(config["host"], config["port"], timeout=15) as server:
+                server.login(config["sender_email"], config["password"])
+                server.send_message(message)
+        else:
+            with smtplib.SMTP(config["host"], config["port"], timeout=15) as server:
+                if config["security"] == "starttls":
+                    server.starttls()
+                server.login(config["sender_email"], config["password"])
+                server.send_message(message)
+    except (OSError, smtplib.SMTPException) as error:
+        set_email_delivery_status(db, f"Ошибка SMTP: {error}")
+        return False
+
+    set_email_delivery_status(db, f"Письмо успешно отправлено на {recipient}.")
+    return True
 
 
 def build_calendar_days(db, today_iso):

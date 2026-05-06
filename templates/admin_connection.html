@@ -1,0 +1,99 @@
+{% extends 'base.html' %}
+{% block title %}Связь{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card wide-card">
+    <h2>Связь</h2>
+    <p>Укажите почту получателя и SMTP-данные почты, с которой сайт будет отправлять уведомления.</p>
+    <p>
+      Для Proton Mail обычный пароль от ящика часто не подходит для SMTP. Используйте пароль Proton Mail Bridge
+      или SMTP-токен, если он включен в вашем тарифе.
+    </p>
+    <form method="post" action="{{ url_for('admin_connection') }}" class="form-grid">
+      <label>Email для уведомлений
+        <input
+          type="email"
+          name="notification_email"
+          value="{{ notification_email }}"
+          placeholder="example@mail.com"
+          required
+        />
+      </label>
+      <label>Email отправителя
+        <input
+          type="email"
+          name="sender_email"
+          value="{{ smtp_config.sender_email }}"
+          placeholder="propdd38@proton.me"
+          required
+        />
+      </label>
+      <label>Пароль SMTP
+        <input
+          type="password"
+          name="site_email_password"
+          placeholder="Оставьте пустым, чтобы не менять сохраненный пароль"
+        />
+      </label>
+      <label>SMTP сервер
+        <input type="text" name="smtp_host" value="{{ smtp_config.host }}" required />
+      </label>
+      <label>SMTP порт
+        <input type="number" name="smtp_port" value="{{ smtp_config.port }}" min="1" max="65535" required />
+      </label>
+      <label>Защита SMTP
+        <select name="smtp_security" required>
+          <option value="starttls" {% if smtp_config.security == 'starttls' %}selected{% endif %}>STARTTLS</option>
+          <option value="ssl" {% if smtp_config.security == 'ssl' %}selected{% endif %}>SSL</option>
+          <option value="none" {% if smtp_config.security == 'none' %}selected{% endif %}>Без шифрования</option>
+        </select>
+      </label>
+      <div class="modal-actions">
+        <button type="submit" name="action" value="save">Сохранить настройки</button>
+        <button type="submit" name="action" value="test" class="secondary">Сохранить и отправить тест</button>
+      </div>
+    </form>
+  </article>
+
+  <article class="card">
+    <h2>Текущие настройки</h2>
+    <div class="table-wrap">
+      <table class="users-table">
+        <thead>
+          <tr>
+            <th>Графа</th>
+            <th>Внесенное значение</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Почта для уведомлений</td>
+            <td>{{ notification_email }}</td>
+          </tr>
+          <tr>
+            <td>Почта отправителя</td>
+            <td>{{ smtp_config.sender_email }}</td>
+          </tr>
+          <tr>
+            <td>Пароль SMTP</td>
+            <td>{% if smtp_config.password %}Настроен{% else %}Не настроен{% endif %}</td>
+          </tr>
+          <tr>
+            <td>SMTP сервер</td>
+            <td>{{ smtp_config.host }}:{{ smtp_config.port }}</td>
+          </tr>
+          <tr>
+            <td>Защита SMTP</td>
+            <td>{{ smtp_config.security }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </article>
+
+  <article class="card">
+    <h2>Статус отправки</h2>
+    <p>{{ delivery_status }}</p>
+  </article>
+</section>
+{% endblock %}
