@@ -1,10 +1,12 @@
 import json
 import os
 import re
+import smtplib
 import sqlite3
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 from datetime import datetime, timedelta
+from email.message import EmailMessage
 from functools import wraps
 
 from flask import Flask, flash, g, redirect, render_template, request, session, url_for
