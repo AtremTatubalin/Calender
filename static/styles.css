@@ -342,3 +342,13 @@ button.secondary {
     flex-direction: column;
   }
 }
+
+.schedule-table input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: #2563eb;
+}
+
+.schedule-table label {
+  cursor: pointer;
+}

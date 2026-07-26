@@ -16,6 +16,16 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATABASE = os.path.join(BASE_DIR, "app.db")
 ADMIN_SECRET_CODE = os.getenv("ADMIN_SECRET_CODE", "SUPER-ADMIN-123")
 SLOT_HOURS = (10, 12, 14)
+DEFAULT_AVAILABLE_WEEKDAYS = tuple(range(7))
+WEEKDAYS_RU = [
+    (0, "Понедельник", "Пн"),
+    (1, "Вторник", "Вт"),
+    (2, "Среда", "Ср"),
+    (3, "Четверг", "Чт"),
+    (4, "Пятница", "Пт"),
+    (5, "Суббота", "Сб"),
+    (6, "Воскресенье", "Вс"),
+]
 PHONE_REGEX = re.compile(r"^\+7\d{10}$")
 EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 DEFAULT_NOTIFICATION_EMAIL = os.getenv("ADMIN_NOTIFICATION_EMAIL", "propdd38@proton.me")
@@ -117,6 +127,7 @@ def init_db():
         "resend_from_email": DEFAULT_RESEND_FROM_EMAIL,
         "resend_api_key": DEFAULT_RESEND_API_KEY,
         "email_delivery_status": "Уведомления еще не отправлялись.",
+        "available_weekdays": serialize_weekdays(DEFAULT_AVAILABLE_WEEKDAYS),
     }
     for key, value in default_settings.items():
         db.execute(
@@ -135,6 +146,7 @@ def init_db():
 
 def refresh_slots(db):
     now = datetime.utcnow()
+    available_weekdays = get_available_weekdays(db)
     db.execute(
         "DELETE FROM slots WHERE slot_datetime < ? AND status != 'booked'",
         (now.isoformat(),),
@@ -149,17 +161,34 @@ def refresh_slots(db):
           )
         """
     )
+    if available_weekdays:
+        placeholders = ",".join("?" for _ in available_weekdays)
+        db.execute(
+            f"""
+            DELETE FROM slots
+            WHERE status != 'booked'
+              AND CAST(strftime('%w', slot_datetime) AS INTEGER) NOT IN ({placeholders})
+            """,
+            tuple((weekday + 1) % 7 for weekday in available_weekdays),
+        )
+    else:
+        db.execute("DELETE FROM slots WHERE status != 'booked'")
 
-    seed_default_slots(db, now)
+    seed_default_slots(db, now, available_weekdays)
 
 
-def seed_default_slots(db, now: datetime):
+def seed_default_slots(db, now: datetime, available_weekdays=None):
     now = now.replace(minute=0, second=0, microsecond=0)
     start = now
     slots_to_add = []
 
+    if available_weekdays is None:
+        available_weekdays = DEFAULT_AVAILABLE_WEEKDAYS
+
     for day in range(0, 14):
         day_time = start + timedelta(days=day)
+        if day_time.weekday() not in available_weekdays:
+            continue
         for hour in SLOT_HOURS:
             dt = day_time.replace(hour=hour)
             slots_to_add.append((dt.isoformat(), "free", None, datetime.utcnow().isoformat()))
@@ -319,6 +348,31 @@ def pwa_guide():
 @login_required
 def account():
     return render_template("account.html")
+
+
+@app.route("/admin/schedule", methods=["GET", "POST"])
+@admin_required
+def admin_schedule():
+    db = get_db()
+
+    if request.method == "POST":
+        selected_weekdays = parse_weekdays_form(request.form.getlist("weekdays"))
+        if not selected_weekdays:
+            flash("Выберите хотя бы один день недели для записи.", "error")
+            return redirect(url_for("admin_schedule"))
+
+        upsert_setting(db, "available_weekdays", serialize_weekdays(selected_weekdays))
+        refresh_slots(db)
+        db.commit()
+        flash("График доступных дней обновлен.", "success")
+        return redirect(url_for("admin_schedule"))
+
+    selected_weekdays = get_available_weekdays(db)
+    return render_template(
+        "admin_schedule.html",
+        weekdays=WEEKDAYS_RU,
+        selected_weekdays=selected_weekdays,
+    )
 
 
 @app.route("/admin/connection", methods=["GET", "POST"])
@@ -869,6 +923,28 @@ def admin_update_user(user_id):
     return redirect(url_for("admin_users"))
 
 
+def serialize_weekdays(weekdays):
+    return ",".join(str(day) for day in sorted(set(weekdays)))
+
+
+def parse_weekdays_form(values):
+    weekdays = []
+    for value in values:
+        try:
+            weekday = int(value)
+        except (TypeError, ValueError):
+            continue
+        if 0 <= weekday <= 6 and weekday not in weekdays:
+            weekdays.append(weekday)
+    return tuple(sorted(weekdays))
+
+
+def get_available_weekdays(db):
+    raw_value = get_setting(db, "available_weekdays", serialize_weekdays(DEFAULT_AVAILABLE_WEEKDAYS))
+    weekdays = parse_weekdays_form(raw_value.split(","))
+    return weekdays or DEFAULT_AVAILABLE_WEEKDAYS
+
+
 def get_admin_secret_code(db):
     row = db.execute(
         "SELECT value FROM settings WHERE key = 'admin_secret_code'"
@@ -1067,9 +1143,13 @@ def build_calendar_days(db, today_iso):
         SELECT id, slot_datetime, status
         FROM slots
         WHERE date(slot_datetime) >= date(?)
+          AND CAST(strftime('%w', slot_datetime) AS INTEGER) IN (
+            SELECT ((CAST(value AS INTEGER) + 1) % 7)
+            FROM json_each(?)
+          )
         ORDER BY slot_datetime
         """,
-        (today_iso,),
+        (today_iso, json.dumps(get_available_weekdays(db))),
     ).fetchall()
 
     grouped = {}

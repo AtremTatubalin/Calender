@@ -1,0 +1,43 @@
+{% extends 'base.html' %}
+{% block title %}График{% endblock %}
+{% block content %}
+<section class="grid">
+  <article class="card wide-card">
+    <h2>График доступных дней</h2>
+    <p>Выберите дни недели, в которые пользователи смогут записываться на занятия.</p>
+    <p>Если оставить, например, только субботу и воскресенье, календарь записи будет показывать только даты, которые выпадают на эти дни.</p>
+
+    <form method="post" action="{{ url_for('admin_schedule') }}" class="form-grid">
+      <div class="table-wrap">
+        <table class="users-table schedule-table">
+          <thead>
+            <tr>
+              <th>Доступен</th>
+              <th>День недели</th>
+              <th>Коротко</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for value, title, short_title in weekdays %}
+              <tr>
+                <td>
+                  <input
+                    id="weekday-{{ value }}"
+                    type="checkbox"
+                    name="weekdays"
+                    value="{{ value }}"
+                    {% if value in selected_weekdays %}checked{% endif %}
+                  />
+                </td>
+                <td><label for="weekday-{{ value }}">{{ title }}</label></td>
+                <td>{{ short_title }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <button type="submit">Сохранить график</button>
+    </form>
+  </article>
+</section>
+{% endblock %}
