@@ -36,6 +36,39 @@
           </tbody>
         </table>
       </div>
+
+      <div class="schedule-section">
+        <h2>График доступного времени</h2>
+        <p>Выберите время начала занятия. Следующий час будет занят автоматически, поскольку занятие длится 2 часа.</p>
+        <div class="table-wrap">
+          <table class="users-table schedule-table">
+            <thead>
+              <tr>
+                <th>Доступно</th>
+                <th>Начало занятия</th>
+                <th>Автоматически занято до</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for hour in schedule_hours %}
+                <tr>
+                  <td>
+                    <input
+                      id="hour-{{ hour }}"
+                      type="checkbox"
+                      name="hours"
+                      value="{{ hour }}"
+                      {% if hour in selected_hours %}checked{% endif %}
+                    />
+                  </td>
+                  <td><label for="hour-{{ hour }}">{{ '%02d:00' | format(hour) }}</label></td>
+                  <td>{{ '%02d:00' | format(hour + 1) }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
       <button type="submit">Сохранить график</button>
     </form>
   </article>

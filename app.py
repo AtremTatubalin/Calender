@@ -16,6 +16,7 @@ BASE_DIR = os.path.abspath(os.path.dirname(__file__))
 DATABASE = os.path.join(BASE_DIR, "app.db")
 ADMIN_SECRET_CODE = os.getenv("ADMIN_SECRET_CODE", "SUPER-ADMIN-123")
 SLOT_HOURS = (10, 12, 14)
+SCHEDULE_HOURS = tuple(range(8, 19))
 DEFAULT_AVAILABLE_WEEKDAYS = tuple(range(7))
 WEEKDAYS_RU = [
     (0, "Понедельник", "Пн"),
@@ -128,6 +129,7 @@ def init_db():
         "resend_api_key": DEFAULT_RESEND_API_KEY,
         "email_delivery_status": "Уведомления еще не отправлялись.",
         "available_weekdays": serialize_weekdays(DEFAULT_AVAILABLE_WEEKDAYS),
+        "available_hours": serialize_hours(SLOT_HOURS),
     }
     for key, value in default_settings.items():
         db.execute(
@@ -147,19 +149,22 @@ def init_db():
 def refresh_slots(db):
     now = datetime.utcnow()
     available_weekdays = get_available_weekdays(db)
+    available_hours = get_available_hours(db)
     db.execute(
         "DELETE FROM slots WHERE slot_datetime < ? AND status != 'booked'",
         (now.isoformat(),),
     )
+    hour_placeholders = ",".join("?" for _ in available_hours)
     db.execute(
-        """
+        f"""
         DELETE FROM slots
         WHERE status != 'booked'
           AND (
-            CAST(strftime('%H', slot_datetime) AS INTEGER) NOT IN (10, 12, 14)
+            CAST(strftime('%H', slot_datetime) AS INTEGER) NOT IN ({hour_placeholders})
             OR strftime('%M', slot_datetime) != '00'
           )
-        """
+        """,
+        available_hours,
     )
     if available_weekdays:
         placeholders = ",".join("?" for _ in available_weekdays)
@@ -174,22 +179,24 @@ def refresh_slots(db):
     else:
         db.execute("DELETE FROM slots WHERE status != 'booked'")
 
-    seed_default_slots(db, now, available_weekdays)
+    seed_default_slots(db, now, available_weekdays, available_hours)
 
 
-def seed_default_slots(db, now: datetime, available_weekdays=None):
+def seed_default_slots(db, now: datetime, available_weekdays=None, available_hours=None):
     now = now.replace(minute=0, second=0, microsecond=0)
     start = now
     slots_to_add = []
 
     if available_weekdays is None:
         available_weekdays = DEFAULT_AVAILABLE_WEEKDAYS
+    if available_hours is None:
+        available_hours = SLOT_HOURS
 
     for day in range(0, 14):
         day_time = start + timedelta(days=day)
         if day_time.weekday() not in available_weekdays:
             continue
-        for hour in SLOT_HOURS:
+        for hour in available_hours:
             dt = day_time.replace(hour=hour)
             slots_to_add.append((dt.isoformat(), "free", None, datetime.utcnow().isoformat()))
 
@@ -357,21 +364,29 @@ def admin_schedule():
 
     if request.method == "POST":
         selected_weekdays = parse_weekdays_form(request.form.getlist("weekdays"))
+        selected_hours = parse_hours_form(request.form.getlist("hours"))
         if not selected_weekdays:
             flash("Выберите хотя бы один день недели для записи.", "error")
             return redirect(url_for("admin_schedule"))
+        if not selected_hours:
+            flash("Выберите хотя бы одно доступное время для записи.", "error")
+            return redirect(url_for("admin_schedule"))
 
         upsert_setting(db, "available_weekdays", serialize_weekdays(selected_weekdays))
+        upsert_setting(db, "available_hours", serialize_hours(selected_hours))
         refresh_slots(db)
         db.commit()
-        flash("График доступных дней обновлен.", "success")
+        flash("График доступных дней и времени обновлен.", "success")
         return redirect(url_for("admin_schedule"))
 
     selected_weekdays = get_available_weekdays(db)
+    selected_hours = get_available_hours(db)
     return render_template(
         "admin_schedule.html",
         weekdays=WEEKDAYS_RU,
         selected_weekdays=selected_weekdays,
+        schedule_hours=SCHEDULE_HOURS[:-1],
+        selected_hours=selected_hours,
     )
 
 
@@ -943,6 +958,29 @@ def get_available_weekdays(db):
     raw_value = get_setting(db, "available_weekdays", serialize_weekdays(DEFAULT_AVAILABLE_WEEKDAYS))
     weekdays = parse_weekdays_form(raw_value.split(","))
     return weekdays or DEFAULT_AVAILABLE_WEEKDAYS
+
+
+def serialize_hours(hours):
+    return ",".join(str(hour) for hour in sorted(set(hours)))
+
+
+def parse_hours_form(values):
+    hours = []
+    for value in values:
+        try:
+            hour = int(value)
+        except (TypeError, ValueError):
+            continue
+        # 18:00 is the end of the final two-hour lesson, not a start time.
+        if SCHEDULE_HOURS[0] <= hour < SCHEDULE_HOURS[-1] and hour not in hours:
+            hours.append(hour)
+    return tuple(sorted(hours))
+
+
+def get_available_hours(db):
+    raw_value = get_setting(db, "available_hours", serialize_hours(SLOT_HOURS))
+    hours = parse_hours_form(raw_value.split(","))
+    return hours or SLOT_HOURS
 
 
 def get_admin_secret_code(db):
