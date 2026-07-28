@@ -46,7 +46,6 @@
               <tr>
                 <th>Доступно</th>
                 <th>Начало занятия</th>
-                <th>Автоматически занято до</th>
               </tr>
             </thead>
             <tbody>
@@ -62,7 +61,6 @@
                     />
                   </td>
                   <td><label for="hour-{{ hour }}">{{ '%02d:00' | format(hour) }}</label></td>
-                  <td>{{ '%02d:00' | format(hour + 1) }}</td>
                 </tr>
               {% endfor %}
             </tbody>
