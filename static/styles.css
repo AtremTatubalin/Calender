@@ -352,3 +352,11 @@ button.secondary {
 .schedule-table label {
   cursor: pointer;
 }
+
+.schedule-section {
+  margin-top: 20px;
+}
+
+.schedule-section h2 {
+  margin-bottom: 8px;
+}
